@@ -51,6 +51,12 @@ div#main_shell_innercontainer pre {
   white-space: pre-wrap;
 }
 
+div#main_shell_innercontainer pre .xterm {
+  height: 100%;
+  width: 100%;
+  white-space: normal;
+}
+
 section#filesystem {
   opacity: 1;
 }

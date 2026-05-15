@@ -1,4 +1,3 @@
-import { listen } from "@tauri-apps/api/event";
 import {
   getBootstrapConfig,
   getKeyboardOverride,
@@ -9,17 +8,12 @@ import {
   readTheme,
   setKeyboardOverride,
   setThemeOverride,
-  spawnTerminal,
-  resizeTerminal,
-  writeTerminal,
-  killTerminal,
   type BootstrapConfig,
   type JsonObject,
-  type TerminalDataEvent,
-  type TerminalExitEvent,
   type ThemeConfig,
 } from "./backend";
 import { Keyboard } from "./keyboard";
+import type { TauriTerminal } from "./terminal";
 
 declare global {
   interface Window {
@@ -46,8 +40,9 @@ window.settings = {};
 window.shortcuts = [];
 window.lastWindowState = {};
 window.currentTerm = 0;
+window.term = {};
 
-let mainTerminalId: number | null = null;
+let mainTerminal: TauriTerminal | null = null;
 
 window.eval = () => {
   throw new Error("eval() is disabled for security reasons.");
@@ -221,108 +216,23 @@ async function loadBootstrapConfig() {
   });
 }
 
-function terminalElement() {
-  return document.getElementById(`terminal${window.currentTerm}`) || document.getElementById("terminal0");
-}
-
-window.term = {
-  0: {
-    write: (data: string) => {
-      if (mainTerminalId === null) {
-        appendTerminalOutput(data);
-        return;
-      }
-      writeTerminal(mainTerminalId, data).catch((error) => {
-        console.error("Failed to write to terminal", error);
-      });
-    },
-    writelr: (data: string) => {
-      window.term?.[0]?.write?.(`${data}\r`);
-    },
-    fit: () => {
-      if (mainTerminalId !== null) {
-        resizeTerminal(mainTerminalId, 80, 24).catch((error) => {
-          console.error("Failed to resize terminal", error);
-        });
-      }
-    },
-    term: {
-      focus: () => terminalElement()?.focus(),
-    },
-  },
-};
-
-function stripTerminalControls(data: string) {
-  return data
-    .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[=>]/g, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
-}
-
-function appendTerminalOutput(data: string) {
-  const terminal = terminalElement();
-  if (!terminal) return;
-  terminal.textContent = `${terminal.textContent || ""}${stripTerminalControls(data)}`;
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-function terminalInputFromKey(event: KeyboardEvent) {
-  if (event.ctrlKey || event.metaKey || event.altKey) return null;
-
-  switch (event.key) {
-    case "Enter":
-      return "\r";
-    case "Backspace":
-      return "\x7f";
-    case "Delete":
-      return "\x1b[3~";
-    case "Tab":
-      return "\t";
-    case "ArrowUp":
-      return "\x1b[A";
-    case "ArrowDown":
-      return "\x1b[B";
-    case "ArrowRight":
-      return "\x1b[C";
-    case "ArrowLeft":
-      return "\x1b[D";
-    default:
-      return event.key.length === 1 ? event.key : null;
-  }
-}
-
-function isTextInputTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
-}
-
 async function initTerminalBackend() {
-  const terminal = document.getElementById("terminal0");
-  if (terminal) {
-    terminal.tabIndex = 0;
-    terminal.textContent = "";
-  }
+  if (!window.theme) throw new Error("theme must be loaded before terminal initialization");
+  const { TauriTerminal } = await import("./terminal");
 
-  await listen<TerminalDataEvent>("terminal:data", (event) => {
-    if (mainTerminalId === null || event.payload.id === mainTerminalId) appendTerminalOutput(event.payload.data);
+  mainTerminal = new TauriTerminal({
+    parentId: "terminal0",
+    settings: window.settings,
+    theme: window.theme,
   });
-  await listen<TerminalExitEvent>("terminal:exit", (event) => {
-    if (event.payload.id !== mainTerminalId) return;
-    appendTerminalOutput(
-      `\n[process exited with code ${event.payload.code}${event.payload.signal ? `, signal ${event.payload.signal}` : ""}]\n`,
-    );
-    mainTerminalId = null;
-  });
+  window.term = { 0: mainTerminal };
 
-  const session = await spawnTerminal(window.settings, 80, 24);
-  mainTerminalId = session.id;
+  const session = await mainTerminal.start();
   document.getElementById("shell_tab0")?.replaceChildren(document.createElement("p"));
   document.querySelector("#shell_tab0 > p")!.textContent = `MAIN - ${session.pid ?? "PTY"}`;
 
   window.addEventListener("beforeunload", () => {
-    if (mainTerminalId !== null) void killTerminal(mainTerminalId);
+    void mainTerminal?.dispose();
   });
 }
 
@@ -404,19 +314,23 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "F11" && !window.settings.allowWindowed) event.preventDefault();
   if (event.code === "KeyD" && event.ctrlKey) event.preventDefault();
   if (event.code === "KeyA" && event.ctrlKey) event.preventDefault();
+});
 
-  if (isTextInputTarget(event.target)) return;
-  const terminalInput = terminalInputFromKey(event);
-  if (terminalInput === null) return;
-  window.term?.[window.currentTerm || 0]?.write?.(terminalInput);
-  event.preventDefault();
+window.addEventListener("resize", () => {
+  window.term?.[window.currentTerm || 0]?.fit?.();
 });
 
 window.addEventListener("DOMContentLoaded", () => {
   loadBootstrapConfig()
     .then(async () => {
-      await initTerminalBackend();
       await initKeyboard();
+      initTerminalBackend().catch((error) => {
+        const terminal = document.getElementById("terminal0");
+        if (terminal) {
+          terminal.textContent = `terminal failed to initialize\n\n${String(error)}`;
+        }
+        console.error("Failed to initialize terminal", error);
+      });
     })
     .catch((error) => {
       console.error("Failed to load eDEX config", error);
