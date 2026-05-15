@@ -36,6 +36,26 @@ export type TerminalLaunchConfig = {
   port: number;
 };
 
+export type TerminalSessionInfo = {
+  id: number;
+  pid: number | null;
+  shell: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+};
+
+export type TerminalDataEvent = {
+  id: number;
+  data: string;
+};
+
+export type TerminalExitEvent = {
+  id: number;
+  code: number;
+  signal: string | null;
+};
+
 export type ShortcutConfig = {
   trigger: string;
   type: "app" | "shell" | string;
@@ -158,6 +178,28 @@ export function writeLastWindowState(state: JsonObject) {
 
 export function prepareTerminalEnvironment(settings: JsonObject) {
   return invoke<TerminalLaunchConfig>("prepare_terminal_environment", { settings });
+}
+
+export function spawnTerminal(settings: JsonObject, cols = 80, rows = 24) {
+  return invoke<TerminalSessionInfo>("spawn_terminal", {
+    request: {
+      settings,
+      cols,
+      rows,
+    },
+  });
+}
+
+export function writeTerminal(id: number, data: string) {
+  return invoke<void>("write_terminal", { id, data });
+}
+
+export function resizeTerminal(id: number, cols: number, rows: number) {
+  return invoke<void>("resize_terminal", { id, cols, rows });
+}
+
+export function killTerminal(id: number) {
+  return invoke<void>("kill_terminal", { id });
 }
 
 export function getPlatformInfo() {

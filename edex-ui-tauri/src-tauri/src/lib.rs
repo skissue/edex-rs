@@ -1,13 +1,19 @@
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     env, fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Mutex,
+    },
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, LogicalSize, Manager, Size, State};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State};
 
 const THEMES: &[(&str, &str)] = &[
     (
@@ -274,10 +280,56 @@ struct WindowSizeRequest {
     height: f64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpawnTerminalRequest {
+    settings: Value,
+    cols: Option<u16>,
+    rows: Option<u16>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalSessionInfo {
+    id: u32,
+    pid: Option<u32>,
+    shell: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalDataEvent {
+    id: u32,
+    data: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalExitEvent {
+    id: u32,
+    code: u32,
+    signal: Option<String>,
+}
+
 #[derive(Default)]
 struct BackendState {
     theme_override: Mutex<Option<String>>,
     keyboard_override: Mutex<Option<String>>,
+}
+
+#[derive(Default)]
+struct TerminalManager {
+    next_id: AtomicU32,
+    sessions: Mutex<HashMap<u32, TerminalSession>>,
+}
+
+struct TerminalSession {
+    master: Box<dyn MasterPty + Send>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
 }
 
 fn default_settings(config_dir: &Path) -> Value {
@@ -938,26 +990,196 @@ fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, St
 }
 
 #[tauri::command]
-fn spawn_terminal(settings: Value) -> Result<Value, String> {
-    Err(format!(
-        "terminal spawning is not implemented in the Rust backend yet; received settings keys: {}",
-        settings.as_object().map(Map::len).unwrap_or_default()
-    ))
+fn spawn_terminal(
+    app: AppHandle,
+    state: State<'_, TerminalManager>,
+    request: SpawnTerminalRequest,
+) -> Result<TerminalSessionInfo, String> {
+    let metadata = app_metadata(&app);
+    let launch = prepare_terminal_launch(&request.settings, &metadata)?;
+    let cols = request.cols.unwrap_or(80).max(1);
+    let rows = request.rows.unwrap_or(24).max(1);
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|err| format!("failed to open PTY: {err}"))?;
+
+    let mut command = CommandBuilder::new(&launch.shell);
+    command.env_clear();
+    for (key, value) in &launch.env {
+        command.env(key, value);
+    }
+    command.cwd(&launch.cwd);
+
+    for arg in terminal_shell_args(&launch)? {
+        command.arg(arg);
+    }
+
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|err| format!("failed to spawn terminal shell: {err}"))?;
+    let pid = child.process_id();
+    let killer = child.clone_killer();
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|err| format!("failed to open PTY reader: {err}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|err| format!("failed to open PTY writer: {err}"))?;
+
+    let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+    let session = TerminalSession {
+        master: pair.master,
+        writer: Mutex::new(writer),
+        killer: Mutex::new(killer),
+    };
+    state
+        .sessions
+        .lock()
+        .map_err(|_| "terminal session state is poisoned".to_string())?
+        .insert(id, session);
+
+    let read_app = app.clone();
+    thread::spawn(move || {
+        let mut buffer = [0; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(len) => {
+                    let data = String::from_utf8_lossy(&buffer[..len]).to_string();
+                    let _ = read_app.emit("terminal:data", TerminalDataEvent { id, data });
+                }
+                Err(err) => {
+                    eprintln!("[terminal] failed to read PTY session {id}: {err}");
+                    break;
+                }
+            }
+        }
+    });
+
+    let wait_app = app.clone();
+    thread::spawn(move || match child.wait() {
+        Ok(status) => {
+            wait_app
+                .state::<TerminalManager>()
+                .sessions
+                .lock()
+                .map(|mut sessions| sessions.remove(&id))
+                .ok();
+            let _ = wait_app.emit(
+                "terminal:exit",
+                TerminalExitEvent {
+                    id,
+                    code: status.exit_code(),
+                    signal: status.signal().map(ToString::to_string),
+                },
+            );
+        }
+        Err(err) => {
+            eprintln!("[terminal] failed waiting for PTY session {id}: {err}");
+            wait_app
+                .state::<TerminalManager>()
+                .sessions
+                .lock()
+                .map(|mut sessions| sessions.remove(&id))
+                .ok();
+        }
+    });
+
+    Ok(TerminalSessionInfo {
+        id,
+        pid,
+        shell: launch.shell,
+        cwd: launch.cwd,
+        cols,
+        rows,
+    })
 }
 
 #[tauri::command]
-fn write_terminal(port: u16, data: String) -> Result<(), String> {
-    Err(format!(
-        "terminal write is not implemented in the Rust backend yet for port {port} ({} bytes)",
-        data.len()
-    ))
+fn write_terminal(state: State<'_, TerminalManager>, id: u32, data: String) -> Result<(), String> {
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "terminal session state is poisoned".to_string())?;
+    let session = sessions
+        .get(&id)
+        .ok_or_else(|| format!("terminal session {id} does not exist"))?;
+    let mut writer = session
+        .writer
+        .lock()
+        .map_err(|_| format!("terminal session {id} writer is poisoned"))?;
+    writer
+        .write_all(data.as_bytes())
+        .map_err(|err| format!("failed to write to terminal session {id}: {err}"))?;
+    writer
+        .flush()
+        .map_err(|err| format!("failed to flush terminal session {id}: {err}"))
 }
 
 #[tauri::command]
-fn resize_terminal(port: u16, cols: u16, rows: u16) -> Result<(), String> {
-    Err(format!(
-        "terminal resize is not implemented in the Rust backend yet for port {port} ({cols}x{rows})"
-    ))
+fn resize_terminal(
+    state: State<'_, TerminalManager>,
+    id: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "terminal session state is poisoned".to_string())?;
+    let session = sessions
+        .get(&id)
+        .ok_or_else(|| format!("terminal session {id} does not exist"))?;
+    session
+        .master
+        .resize(PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|err| format!("failed to resize terminal session {id}: {err}"))
+}
+
+#[tauri::command]
+fn kill_terminal(state: State<'_, TerminalManager>, id: u32) -> Result<(), String> {
+    let session = state
+        .sessions
+        .lock()
+        .map_err(|_| "terminal session state is poisoned".to_string())?
+        .remove(&id)
+        .ok_or_else(|| format!("terminal session {id} does not exist"))?;
+    let result = session
+        .killer
+        .lock()
+        .map_err(|_| format!("terminal session {id} killer is poisoned"))?
+        .kill()
+        .map_err(|err| format!("failed to kill terminal session {id}: {err}"));
+    result
+}
+
+fn terminal_shell_args(launch: &TerminalLaunchConfig) -> Result<Vec<String>, String> {
+    if !launch.shell_args.trim().is_empty() {
+        return shell_words::split(&launch.shell_args)
+            .map_err(|err| format!("failed to parse shellArgs: {err}"));
+    }
+
+    if cfg!(target_os = "windows") {
+        Ok(Vec::new())
+    } else {
+        Ok(vec!["--login".to_string()])
+    }
 }
 
 fn apply_startup_window_settings(
@@ -1001,6 +1223,7 @@ fn apply_startup_window_settings(
 pub fn run() {
     tauri::Builder::default()
         .manage(BackendState::default())
+        .manage(TerminalManager::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let bootstrap = ensure_default_config(app.handle()).map_err(|err| {
@@ -1047,7 +1270,8 @@ pub fn run() {
             system_information_call,
             spawn_terminal,
             write_terminal,
-            resize_terminal
+            resize_terminal,
+            kill_terminal
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
