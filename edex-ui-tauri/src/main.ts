@@ -18,6 +18,30 @@ type EdexPaths = {
   settingsFile: string;
   shortcutsFile: string;
   lastWindowStateFile: string;
+  versionHistoryFile: string;
+};
+
+type BootFlags = {
+  nointroOverride: boolean;
+  nocursorOverride: boolean;
+  args: string[];
+};
+
+type AppMetadata = {
+  version: string;
+  packageName: string;
+  productName: string;
+  identifier: string;
+  platform: string;
+  arch: string;
+};
+
+type TerminalLaunchConfig = {
+  shell: string;
+  shellArgs: string;
+  cwd: string;
+  env: Record<string, string>;
+  port: number;
 };
 
 type BootstrapConfig = {
@@ -25,6 +49,10 @@ type BootstrapConfig = {
   settings: Record<string, unknown>;
   shortcuts: Array<Record<string, unknown>>;
   lastWindowState: Record<string, unknown>;
+  versionHistory: Record<string, unknown>;
+  flags: BootFlags;
+  metadata: AppMetadata;
+  terminalLaunch: TerminalLaunchConfig;
 };
 
 declare global {
@@ -35,7 +63,11 @@ declare global {
 
 async function loadBootstrapConfig() {
   window.edexBoot = await invoke<BootstrapConfig>("get_bootstrap_config");
-  console.info("Loaded eDEX config", window.edexBoot);
+  console.info("Loaded eDEX config", {
+    settingsDir: window.edexBoot.paths.settingsDir,
+    version: window.edexBoot.metadata.version,
+    shell: window.edexBoot.terminalLaunch.shell,
+  });
 }
 
 function updateClock() {
