@@ -73,6 +73,7 @@ export class TauriTerminal {
   private fitFrame: number | null = null;
   private lastCols = 0;
   private lastRows = 0;
+  private lastTouchY: number | null = null;
 
   cwd = "";
   oncwdchange: (cwd: string | null) => void = () => undefined;
@@ -82,16 +83,23 @@ export class TauriTerminal {
   clipboard = {
     copy: () => {
       if (!this.term.hasSelection()) return false;
-      void navigator.clipboard.writeText(this.term.getSelection());
+      void navigator.clipboard.writeText(this.term.getSelection()).catch((error) => {
+        console.error("Failed to copy terminal selection", error);
+      });
       this.term.clearSelection();
       this.clipboard.didCopy = true;
       return true;
     },
     paste: () => {
-      void navigator.clipboard.readText().then((text) => {
-        this.write(text);
-        this.clipboard.didCopy = false;
-      });
+      void navigator.clipboard
+        .readText()
+        .then((text) => {
+          this.write(text);
+          this.clipboard.didCopy = false;
+        })
+        .catch((error) => {
+          console.error("Failed to read terminal clipboard", error);
+        });
     },
     didCopy: false,
   };
@@ -124,6 +132,26 @@ export class TauriTerminal {
     this.term.loadAddon(this.fitAddon);
     this.term.open(this.parent);
     this.term.onData((data) => this.write(data));
+    this.parent.addEventListener("wheel", (event) => {
+      this.term.scrollLines(Math.round(event.deltaY / 10));
+    });
+    this.parent.addEventListener("touchstart", (event) => {
+      this.lastTouchY = event.targetTouches[0]?.screenY ?? null;
+    });
+    this.parent.addEventListener("touchmove", (event) => {
+      if (this.lastTouchY === null) return;
+      const y = event.changedTouches[0]?.screenY;
+      if (typeof y !== "number") return;
+      const deltaY = y - this.lastTouchY;
+      this.lastTouchY = y;
+      this.term.scrollLines(-Math.round(deltaY / 10));
+    });
+    this.parent.addEventListener("touchend", () => {
+      this.lastTouchY = null;
+    });
+    this.parent.addEventListener("touchcancel", () => {
+      this.lastTouchY = null;
+    });
     this.parent.querySelectorAll(".xterm-helper-textarea").forEach((textarea) => {
       textarea.setAttribute("readonly", "readonly");
     });

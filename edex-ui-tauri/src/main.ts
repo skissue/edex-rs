@@ -10,6 +10,7 @@ import {
   setThemeOverride,
   type BootstrapConfig,
   type JsonObject,
+  type ShortcutConfig,
   type ThemeConfig,
 } from "./backend";
 import { Keyboard } from "./keyboard";
@@ -44,6 +45,9 @@ window.term = {};
 
 let mainTerminal: TauriTerminal | null = null;
 let resizeFrame: number | null = null;
+let terminalClassPromise: Promise<typeof TauriTerminal> | null = null;
+let registeredShortcuts: ShortcutConfig[] = [];
+const MAX_TERMINALS = 5;
 
 window.eval = () => {
   throw new Error("eval() is disabled for security reasons.");
@@ -192,6 +196,90 @@ function activeTerminal() {
   return window.term?.[window.currentTerm || 0] as TauriTerminal | undefined;
 }
 
+function loadTerminalClass() {
+  terminalClassPromise ??= import("./terminal").then((module) => module.TauriTerminal);
+  return terminalClassPromise;
+}
+
+function setShellTabText(number: number, text: string) {
+  const tab = document.getElementById(`shell_tab${number}`);
+  if (!tab) return;
+  tab.replaceChildren(document.createElement("p"));
+  tab.querySelector("p")!.textContent = text;
+}
+
+function setActiveShellTab(number: number) {
+  document.querySelectorAll("ul#main_shell_tabs > li").forEach((tab) => tab.classList.remove("active"));
+  document.getElementById(`shell_tab${number}`)?.classList.add("active");
+
+  document.querySelectorAll("div#main_shell_innercontainer > pre").forEach((terminal) => terminal.classList.remove("active"));
+  document.getElementById(`terminal${number}`)?.classList.add("active");
+  window.currentTerm = number;
+}
+
+function terminalSettings(number: number) {
+  const settings = { ...window.settings };
+  const cwd = activeTerminal()?.cwd;
+  if (number > 0 && cwd) settings.cwd = cwd;
+  return settings;
+}
+
+async function createTerminal(number: number) {
+  if (!window.theme) throw new Error("theme must be loaded before terminal initialization");
+  if (number < 0 || number >= MAX_TERMINALS) return;
+  if (window.term?.[number]) {
+    setActiveShellTab(number);
+    activeTerminal()?.scheduleFit();
+    activeTerminal()?.term.focus();
+    activeTerminal()?.resendCWD();
+    return;
+  }
+
+  setShellTabText(number, number === 0 ? "MAIN SHELL" : "LOADING...");
+  const TerminalClass = await loadTerminalClass();
+  const term = new TerminalClass({
+    parentId: `terminal${number}`,
+    settings: terminalSettings(number),
+    theme: window.theme,
+  });
+
+  term.oncwdchange = (cwd) => {
+    if (window.currentTerm !== number || !cwd) return;
+    const title = document.getElementById("fs_disp_title_dir");
+    if (title) title.textContent = cwd;
+  };
+  term.onprocesschange = (processName) => {
+    setShellTabText(number, number === 0 ? `MAIN - ${processName || "PTY"}` : `#${number + 1} - ${processName || "PTY"}`);
+  };
+  term.onclose = () => {
+    if (number === 0) {
+      setShellTabText(number, "MAIN - EXITED");
+      return;
+    }
+
+    term.dispose().catch((error) => console.error("Failed to dispose closed terminal", error));
+    delete window.term?.[number];
+    setShellTabText(number, "EMPTY");
+    document.getElementById(`terminal${number}`)?.replaceChildren();
+    if (window.currentTerm === number) window.useAppShortcut("PREVIOUS_TAB");
+  };
+
+  window.term = { ...(window.term || {}), [number]: term };
+  setActiveShellTab(number);
+
+  try {
+    const session = await term.start();
+    setShellTabText(number, number === 0 ? `MAIN - ${session.pid ?? "PTY"}` : `#${number + 1} - ${session.pid ?? "PTY"}`);
+    term.scheduleFit();
+    term.resendCWD();
+  } catch (error) {
+    delete window.term?.[number];
+    setShellTabText(number, "ERROR");
+    term.dispose().catch(() => undefined);
+    throw error;
+  }
+}
+
 async function loadBootstrapConfig() {
   const boot = await getBootstrapConfig();
   const themeOverride = await getThemeOverride();
@@ -222,23 +310,8 @@ async function loadBootstrapConfig() {
 }
 
 async function initTerminalBackend() {
-  if (!window.theme) throw new Error("theme must be loaded before terminal initialization");
-  const { TauriTerminal } = await import("./terminal");
-
-  mainTerminal = new TauriTerminal({
-    parentId: "terminal0",
-    settings: window.settings,
-    theme: window.theme,
-  });
-  mainTerminal.oncwdchange = (cwd) => {
-    const title = document.getElementById("fs_disp_title_dir");
-    if (title && cwd) title.textContent = cwd;
-  };
-  window.term = { 0: mainTerminal };
-
-  const session = await mainTerminal.start();
-  document.getElementById("shell_tab0")?.replaceChildren(document.createElement("p"));
-  document.querySelector("#shell_tab0 > p")!.textContent = `MAIN - ${session.pid ?? "PTY"}`;
+  await createTerminal(0);
+  mainTerminal = window.term?.[0] as TauriTerminal | null;
 
   window.addEventListener("beforeunload", () => {
     void mainTerminal?.shutdownBackend();
@@ -279,19 +352,98 @@ window.remakeKeyboard = async (layout: string) => {
 };
 
 window.focusShellTab = (number: number) => {
-  document.querySelectorAll("ul#main_shell_tabs > li").forEach((tab) => tab.classList.remove("active"));
-  document.getElementById(`shell_tab${number}`)?.classList.add("active");
-
-  document.querySelectorAll("div#main_shell_innercontainer > pre").forEach((terminal) => terminal.classList.remove("active"));
-  document.getElementById(`terminal${number}`)?.classList.add("active");
-  window.currentTerm = number;
-  activeTerminal()?.scheduleFit();
-  activeTerminal()?.term.focus();
-  activeTerminal()?.resendCWD();
+  void createTerminal(number).catch((error) => {
+    setShellTabText(number, "ERROR");
+    console.error(`Failed to focus terminal tab ${number}`, error);
+  });
 };
+
+function normalizeShortcutKey(key: string) {
+  const aliases: Record<string, string> = {
+    " ": "SPACE",
+    SPACEBAR: "SPACE",
+    ESC: "ESCAPE",
+    RETURN: "ENTER",
+    PLUS: "+",
+  };
+  const normalized = key.length === 1 ? key.toUpperCase() : key.toUpperCase();
+  return aliases[normalized] || normalized;
+}
+
+function shortcutMatchesEvent(trigger: string, event: KeyboardEvent) {
+  const parts = trigger.split("+").map((part) => part.trim()).filter(Boolean);
+  const key = parts.pop();
+  if (!key) return false;
+
+  const modifiers = new Set(parts.map((part) => part.toLowerCase()));
+  if (event.ctrlKey !== (modifiers.has("ctrl") || modifiers.has("control"))) return false;
+  if (event.altKey !== modifiers.has("alt")) return false;
+  if (event.shiftKey !== modifiers.has("shift")) return false;
+  if (event.metaKey !== (modifiers.has("meta") || modifiers.has("cmd") || modifiers.has("command"))) return false;
+
+  return normalizeShortcutKey(event.key) === normalizeShortcutKey(key);
+}
+
+function expandShortcut(shortcut: ShortcutConfig) {
+  if (shortcut.type === "app" && shortcut.action === "TAB_X") {
+    return Array.from({ length: MAX_TERMINALS }, (_value, index) => ({
+      ...shortcut,
+      trigger: shortcut.trigger.replace("X", String(index + 1)),
+      action: `TAB_${index + 1}`,
+    }));
+  }
+
+  return [shortcut];
+}
+
+function handleRegisteredShortcut(event: KeyboardEvent) {
+  for (const shortcut of registeredShortcuts) {
+    if (!shortcut.enabled || !shortcutMatchesEvent(shortcut.trigger, event)) continue;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (shortcut.type === "app") return window.useAppShortcut(shortcut.action);
+    if (shortcut.type === "shell") {
+      const terminal = activeTerminal();
+      if (shortcut.linebreak) terminal?.writelr(shortcut.action);
+      else terminal?.write(shortcut.action);
+      return true;
+    }
+
+    console.warn(`${shortcut.trigger} has unknown type`);
+    return false;
+  }
+
+  return false;
+}
 
 window.useAppShortcut = (action: string) => {
   switch (action) {
+    case "COPY":
+      activeTerminal()?.clipboard.copy();
+      return true;
+    case "PASTE":
+      activeTerminal()?.clipboard.paste();
+      return true;
+    case "NEXT_TAB":
+      for (let offset = 1; offset <= MAX_TERMINALS; offset += 1) {
+        const next = ((window.currentTerm || 0) + offset) % MAX_TERMINALS;
+        if (window.term?.[next] || next === 0) {
+          window.focusShellTab(next);
+          return true;
+        }
+      }
+      return true;
+    case "PREVIOUS_TAB":
+      for (let offset = 1; offset <= MAX_TERMINALS; offset += 1) {
+        const previous = ((window.currentTerm || 0) - offset + MAX_TERMINALS) % MAX_TERMINALS;
+        if (window.term?.[previous] || previous === 0) {
+          window.focusShellTab(previous);
+          return true;
+        }
+      }
+      return true;
     case "DEV_DEBUG":
       openDevtools().catch((error) => console.warn(error));
       return true;
@@ -313,13 +465,41 @@ window.useAppShortcut = (action: string) => {
     case "TAB_5":
       window.focusShellTab(4);
       return true;
+    case "SETTINGS":
+      console.warn("Settings editor is not ported yet");
+      return false;
+    case "SHORTCUTS":
+      console.warn("Shortcuts editor is not ported yet");
+      return false;
+    case "FUZZY_SEARCH":
+      console.warn("Fuzzy search is not ported yet");
+      return false;
+    case "FS_LIST_VIEW":
+      document.getElementById("filesystem")?.classList.toggle("list-view");
+      return true;
+    case "FS_DOTFILES":
+      console.warn("Filesystem dotfile toggle is not ported yet");
+      return false;
+    case "KB_PASSMODE":
+      window.keyboard?.togglePasswordMode();
+      return true;
     default:
       console.warn(`Shortcut action "${action}" is not ported yet`);
       return false;
   }
 };
 
-window.registerKeyboardShortcuts = () => undefined;
+window.registerKeyboardShortcuts = () => {
+  registeredShortcuts = window.shortcuts.flatMap((shortcut) => expandShortcut(shortcut)).filter((shortcut) => shortcut.enabled);
+};
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    handleRegisteredShortcut(event);
+  },
+  { capture: true },
+);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Alt") event.preventDefault();
@@ -338,8 +518,13 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("DOMContentLoaded", () => {
+  for (let index = 0; index < MAX_TERMINALS; index += 1) {
+    document.getElementById(`shell_tab${index}`)?.addEventListener("click", () => window.focusShellTab(index));
+  }
+
   loadBootstrapConfig()
     .then(async () => {
+      window.registerKeyboardShortcuts();
       await initKeyboard();
       initTerminalBackend().catch((error) => {
         const terminal = document.getElementById("terminal0");
