@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type FontWeight } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
+  killAllTerminals,
   killTerminal,
   resizeTerminal,
   spawnTerminal,
@@ -196,6 +197,13 @@ export class TauriTerminal {
 
   sessionId() {
     return this.id;
+  }
+
+  async shutdownBackend() {
+    this.id = null;
+    await killAllTerminals().catch((error) => {
+      console.error("Failed to kill terminal backend sessions", error);
+    });
   }
 }
 

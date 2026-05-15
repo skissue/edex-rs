@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
 const THEMES: &[(&str, &str)] = &[
     (
@@ -330,6 +330,31 @@ struct TerminalSession {
     master: Box<dyn MasterPty + Send>,
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+}
+
+impl TerminalManager {
+    fn kill_all(&self) -> Result<usize, String> {
+        let sessions = std::mem::take(
+            &mut *self
+                .sessions
+                .lock()
+                .map_err(|_| "terminal session state is poisoned".to_string())?,
+        );
+        let count = sessions.len();
+
+        for (id, session) in sessions {
+            if let Err(err) = session
+                .killer
+                .lock()
+                .map_err(|_| format!("terminal session {id} killer is poisoned"))?
+                .kill()
+            {
+                eprintln!("[terminal] failed to kill PTY session {id}: {err}");
+            }
+        }
+
+        Ok(count)
+    }
 }
 
 fn default_settings(config_dir: &Path) -> Value {
@@ -1169,6 +1194,11 @@ fn kill_terminal(state: State<'_, TerminalManager>, id: u32) -> Result<(), Strin
     result
 }
 
+#[tauri::command]
+fn kill_all_terminals(state: State<'_, TerminalManager>) -> Result<usize, String> {
+    state.kill_all()
+}
+
 fn terminal_shell_args(launch: &TerminalLaunchConfig) -> Result<Vec<String>, String> {
     if !launch.shell_args.trim().is_empty() {
         return shell_words::split(&launch.shell_args)
@@ -1225,6 +1255,13 @@ pub fn run() {
         .manage(BackendState::default())
         .manage(TerminalManager::default())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::CloseRequested { .. }) {
+                if let Err(err) = window.app_handle().state::<TerminalManager>().kill_all() {
+                    eprintln!("[terminal] failed to clean up PTY sessions on close: {err}");
+                }
+            }
+        })
         .setup(|app| {
             let bootstrap = ensure_default_config(app.handle()).map_err(|err| {
                 Box::<dyn std::error::Error>::from(std::io::Error::new(
@@ -1271,7 +1308,8 @@ pub fn run() {
             spawn_terminal,
             write_terminal,
             resize_terminal,
-            kill_terminal
+            kill_terminal,
+            kill_all_terminals
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

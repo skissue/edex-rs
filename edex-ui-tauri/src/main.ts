@@ -232,7 +232,7 @@ async function initTerminalBackend() {
   document.querySelector("#shell_tab0 > p")!.textContent = `MAIN - ${session.pid ?? "PTY"}`;
 
   window.addEventListener("beforeunload", () => {
-    void mainTerminal?.dispose();
+    void mainTerminal?.shutdownBackend();
   });
 }
 

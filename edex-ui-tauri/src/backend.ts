@@ -202,6 +202,10 @@ export function killTerminal(id: number) {
   return invoke<void>("kill_terminal", { id });
 }
 
+export function killAllTerminals() {
+  return invoke<number>("kill_all_terminals");
+}
+
 export function getPlatformInfo() {
   return invoke<PlatformInfo>("get_platform_info");
 }
