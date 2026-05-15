@@ -14,6 +14,7 @@ import {
   type ThemeConfig,
 } from "./backend";
 import type { FilesystemDisplay } from "./filesystem";
+import { FuzzyFinder } from "./fuzzyFinder";
 import { Keyboard } from "./keyboard";
 import type { TauriTerminal } from "./terminal";
 
@@ -32,6 +33,7 @@ declare global {
     themeChanger: (theme: string) => void;
     remakeKeyboard: (layout: string) => void | Promise<void>;
     fsDisp?: FilesystemDisplay;
+    activeFuzzyFinder?: FuzzyFinder;
     useAppShortcut: (action: string) => boolean;
     focusShellTab: (number: number) => void;
     registerKeyboardShortcuts: () => void;
@@ -486,8 +488,8 @@ window.useAppShortcut = (action: string) => {
       console.warn("Shortcuts editor is not ported yet");
       return false;
     case "FUZZY_SEARCH":
-      console.warn("Fuzzy search is not ported yet");
-      return false;
+      window.activeFuzzyFinder = new FuzzyFinder();
+      return true;
     case "FS_LIST_VIEW":
       window.fsDisp?.toggleListview();
       return true;

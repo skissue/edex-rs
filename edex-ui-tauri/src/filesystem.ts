@@ -18,7 +18,7 @@ type Icon = {
   svg: string;
 };
 
-type DisplayBlock = {
+export type FilesystemBlock = {
   name: string;
   path?: string;
   entryType: string;
@@ -59,7 +59,7 @@ function settingsBool(settings: JsonObject, key: string) {
   return settings[key] === true;
 }
 
-function iconFor(block: DisplayBlock) {
+function iconFor(block: FilesystemBlock) {
   switch (block.entryType) {
     case "showDisks":
       return icons.showDisks || icons.disk || icons.other;
@@ -90,7 +90,7 @@ function iconFor(block: DisplayBlock) {
   }
 }
 
-function displayType(block: DisplayBlock) {
+function displayType(block: FilesystemBlock) {
   if (block.entryType === "edex-theme") return "eDEX-UI theme";
   if (block.entryType === "edex-kblayout") return "eDEX-UI keyboard layout";
   if (block.entryType === "edex-settings" || block.entryType === "edex-shortcuts") return "eDEX-UI config file";
@@ -106,7 +106,7 @@ function displayType(block: DisplayBlock) {
 }
 
 export class FilesystemDisplay {
-  cwd: DisplayBlock[] = [];
+  cwd: FilesystemBlock[] = [];
   cwd_path: string | null = null;
   dirpath = "";
   failed = false;
@@ -206,7 +206,7 @@ export class FilesystemDisplay {
 
     try {
       const entries = await listFilesystemDirectory(dir);
-      const blocks: DisplayBlock[] = entries.map((entry) => this.entryToBlock(entry));
+      const blocks: FilesystemBlock[] = entries.map((entry) => this.entryToBlock(entry));
 
       blocks.splice(0, 0, {
         name: "Show disks",
@@ -244,8 +244,8 @@ export class FilesystemDisplay {
     return true;
   }
 
-  render(originBlockList: DisplayBlock[], isDiskView = false) {
-    const blockList = JSON.parse(JSON.stringify(originBlockList)) as DisplayBlock[];
+  render(originBlockList: FilesystemBlock[], isDiskView = false) {
+    const blockList = JSON.parse(JSON.stringify(originBlockList)) as FilesystemBlock[];
 
     if (this.failed) return false;
 
@@ -328,7 +328,7 @@ export class FilesystemDisplay {
     if (block?.path) activeTerminal()?.write(quoteShellPath(block.path));
   }
 
-  private entryToBlock(entry: FilesystemEntry): DisplayBlock {
+  private entryToBlock(entry: FilesystemEntry): FilesystemBlock {
     return {
       name: entry.name,
       path: entry.path,
@@ -340,7 +340,7 @@ export class FilesystemDisplay {
     };
   }
 
-  private deviceToBlock(device: FilesystemDevice): DisplayBlock {
+  private deviceToBlock(device: FilesystemDevice): FilesystemBlock {
     return {
       name: device.name,
       path: device.path,
@@ -358,7 +358,7 @@ export class FilesystemDisplay {
       <h2 id="fs_disp_error">CANNOT ACCESS CURRENT WORKING DIRECTORY</h2>`;
   }
 
-  private activateBlock(index: number, block: DisplayBlock, isDiskView: boolean) {
+  private activateBlock(index: number, block: FilesystemBlock, isDiskView: boolean) {
     if (block.entryType === "showDisks") {
       void this.readDevices();
       return;
