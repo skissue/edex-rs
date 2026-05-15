@@ -13,7 +13,8 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "edex-ui-tauri",
+        "title": "eDEX-UI",
+        "fullscreen": true,
         "width": 800,
         "height": 600
       }

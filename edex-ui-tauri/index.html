@@ -2,42 +2,119 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>eDEX-UI</title>
+
+    <link rel="stylesheet" href="/src/assets/vendor/augmented.css" />
+    <link rel="stylesheet" href="/src/assets/css/main.css" />
+    <link rel="stylesheet" href="/src/assets/css/modal.css" />
+    <link rel="stylesheet" href="/src/assets/css/boot_screen.css" />
+    <link rel="stylesheet" href="/src/assets/css/media_player.css" />
+    <link rel="stylesheet" href="/src/assets/css/main_shell.css" />
+    <link rel="stylesheet" href="/src/assets/css/filesystem.css" />
+    <link rel="stylesheet" href="/src/assets/css/keyboard.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_column.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_clock.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_sysinfo.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_hardwareInspector.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_cpuinfo.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_netstat.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_conninfo.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_globe.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_ramwatcher.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_toplist.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_fuzzyFinder.css" />
+    <link rel="stylesheet" href="/src/assets/css/mod_processlist.css" />
+    <link rel="stylesheet" href="/src/assets/css/extra_ratios.css" />
+    <link rel="stylesheet" href="/src/styles.css" />
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <section class="mod_column activated" id="mod_column_left">
+      <h3 class="title"><p>PANEL</p><p>SYSTEM</p></h3>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
+      <div id="mod_clock" style="animation-play-state: running;">
+        <h1 id="skeleton-clock"><span>00</span><em>:</em><span>00</span></h1>
       </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
-    </main>
+      <div id="mod_sysinfo" style="animation-play-state: running;">
+        <div><h1>OS</h1><h2>TAURI</h2></div>
+        <div><h1>KERNEL</h1><h2>RUST</h2></div>
+        <div><h1>HOST</h1><h2>LOCAL</h2></div>
+      </div>
+
+      <div class="skeleton-module" style="animation-play-state: running;">
+        <header><span>CPU</span><strong>READY</strong></header>
+        <div class="meter"><span style="width: 37%;"></span></div>
+        <p>Legacy frontend static shell</p>
+      </div>
+
+      <div class="skeleton-module" style="animation-play-state: running;">
+        <header><span>MEMORY</span><strong>STANDBY</strong></header>
+        <div class="meter"><span style="width: 62%;"></span></div>
+        <p>System modules pending port</p>
+      </div>
+    </section>
+
+    <section id="main_shell" augmented-ui="bl-clip tr-clip exe">
+      <h3 class="title"><p>TERMINAL</p><p>MAIN SHELL</p></h3>
+      <ul id="main_shell_tabs">
+        <li id="shell_tab0" class="active"><p>MAIN SHELL</p></li>
+        <li id="shell_tab1"><p>EMPTY</p></li>
+        <li id="shell_tab2"><p>EMPTY</p></li>
+        <li id="shell_tab3"><p>EMPTY</p></li>
+        <li id="shell_tab4"><p>EMPTY</p></li>
+      </ul>
+      <div id="main_shell_innercontainer">
+        <pre id="terminal0" class="active">eDEX-UI Tauri migration shell
+
+frontend assets loaded
+electron runtime removed from this skeleton
+rust backend online
+
+user@edex-tauri:~$ _</pre>
+        <pre id="terminal1"></pre>
+        <pre id="terminal2"></pre>
+        <pre id="terminal3"></pre>
+        <pre id="terminal4"></pre>
+      </div>
+    </section>
+
+    <section class="mod_column activated" id="mod_column_right">
+      <h3 class="title"><p>PANEL</p><p>NETWORK</p></h3>
+
+      <div class="skeleton-module" style="animation-play-state: running;">
+        <header><span>NETSTAT</span><strong>IDLE</strong></header>
+        <div class="meter"><span style="width: 48%;"></span></div>
+        <p>0 packets/s</p>
+      </div>
+
+      <div id="mod_globe" class="skeleton-globe" style="animation-play-state: running;">
+        <div class="globe-ring"></div>
+        <p>LOCATION GLOBE</p>
+      </div>
+
+      <div class="skeleton-module" style="animation-play-state: running;">
+        <header><span>CONNECTION</span><strong>LOCAL</strong></header>
+        <p>127.0.0.1</p>
+        <p>localhost</p>
+      </div>
+    </section>
+
+    <section id="filesystem">
+      <h3 class="title"><p>FILESYSTEM</p><p id="fs_disp_title_dir">/home/edex</p></h3>
+      <div id="fs_disp_container">
+        <div class="fs_disp_folder"><span class="file-icon">DIR</span><h3>assets</h3><h4>--</h4></div>
+        <div class="fs_disp_folder"><span class="file-icon">DIR</span><h3>src-tauri</h3><h4>--</h4></div>
+        <div class="fs_disp_file"><span class="file-icon">TS</span><h3>main.ts</h3><h4>1 KB</h4></div>
+        <div class="fs_disp_file"><span class="file-icon">CSS</span><h3>styles.css</h3><h4>3 KB</h4></div>
+      </div>
+      <div id="fs_space_bar">
+        <h3>SPACE</h3><progress max="100" value="42"></progress>
+      </div>
+    </section>
+
+    <section id="keyboard" aria-label="Static keyboard shell"></section>
   </body>
 </html>
