@@ -61,6 +61,33 @@ export type TerminalExitEvent = {
   signal: string | null;
 };
 
+export type FilesystemEntry = {
+  name: string;
+  path: string;
+  entryType: string;
+  category: string;
+  hidden: boolean;
+  size: number | null;
+  lastAccessed: number | null;
+};
+
+export type FilesystemDevice = {
+  name: string;
+  path: string;
+  entryType: string;
+  totalSpace: number;
+  availableSpace: number;
+};
+
+export type FilesystemUsage = {
+  name: string;
+  mount: string;
+  totalSpace: number;
+  availableSpace: number;
+  usedSpace: number;
+  usedPercent: number;
+};
+
 export type ShortcutConfig = {
   trigger: string;
   type: "app" | "shell" | string;
@@ -217,6 +244,22 @@ export function getPlatformInfo() {
 
 export function getMonitors() {
   return invoke<MonitorInfo[]>("get_monitors");
+}
+
+export function listFilesystemDirectory(path: string) {
+  return invoke<FilesystemEntry[]>("list_filesystem_directory", { path });
+}
+
+export function listFilesystemDevices() {
+  return invoke<FilesystemDevice[]>("list_filesystem_devices");
+}
+
+export function getFilesystemUsage(path: string) {
+  return invoke<FilesystemUsage | null>("get_filesystem_usage", { path });
+}
+
+export function openPathExternal(path: string) {
+  return invoke<void>("open_path_external", { path });
 }
 
 export function logMessage(level: string, message: string) {

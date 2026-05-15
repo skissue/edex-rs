@@ -13,6 +13,7 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use sysinfo::Disks;
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
 const THEMES: &[(&str, &str)] = &[
@@ -319,6 +320,39 @@ struct TerminalExitEvent {
     id: u32,
     code: u32,
     signal: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesystemEntry {
+    name: String,
+    path: String,
+    entry_type: String,
+    category: String,
+    hidden: bool,
+    size: Option<u64>,
+    last_accessed: Option<u128>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesystemDevice {
+    name: String,
+    path: String,
+    entry_type: String,
+    total_space: u64,
+    available_space: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesystemUsage {
+    name: String,
+    mount: String,
+    total_space: u64,
+    available_space: u64,
+    used_space: u64,
+    used_percent: f64,
 }
 
 #[derive(Default)]
@@ -739,10 +773,142 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn path_file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path_to_string(path))
+}
+
 fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
         .map_err(|err| format!("failed to resolve app config directory: {err}"))
+}
+
+fn path_modified_millis(metadata: &fs::Metadata) -> Option<u128> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+}
+
+fn edex_entry_type(path: &Path, name: &str, category: &str, app: &AppHandle) -> Option<String> {
+    let (paths, settings_dir) = settings_paths(app).ok()?;
+    let themes_dir = PathBuf::from(paths.themes_dir);
+    let keyboards_dir = PathBuf::from(paths.keyboards_dir);
+
+    if category == "dir" && paths_refer_to_same_location(path, &themes_dir) {
+        return Some("edex-themesDir".to_string());
+    }
+    if category == "dir" && paths_refer_to_same_location(path, &keyboards_dir) {
+        return Some("edex-kblayoutsDir".to_string());
+    }
+    if category == "file" && paths_refer_to_same_location(path, &settings_dir.join("settings.json"))
+    {
+        return Some("edex-settings".to_string());
+    }
+    if category == "file"
+        && paths_refer_to_same_location(path, &settings_dir.join("shortcuts.json"))
+    {
+        return Some("edex-shortcuts".to_string());
+    }
+    if category == "file"
+        && path
+            .parent()
+            .is_some_and(|parent| paths_refer_to_same_location(parent, &themes_dir))
+        && name.ends_with(".json")
+    {
+        return Some("edex-theme".to_string());
+    }
+    if category == "file"
+        && path
+            .parent()
+            .is_some_and(|parent| paths_refer_to_same_location(parent, &keyboards_dir))
+        && name.ends_with(".json")
+    {
+        return Some("edex-kblayout".to_string());
+    }
+
+    None
+}
+
+fn filesystem_entry_from_path(path: PathBuf, app: &AppHandle) -> FilesystemEntry {
+    let name = path_file_name(&path);
+    let hidden = name.starts_with('.');
+
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            let file_type = metadata.file_type();
+            let (category, mut entry_type) = if file_type.is_dir() {
+                ("dir".to_string(), "dir".to_string())
+            } else if file_type.is_symlink() {
+                ("symlink".to_string(), "symlink".to_string())
+            } else if file_type.is_file() {
+                ("file".to_string(), "file".to_string())
+            } else {
+                ("other".to_string(), "other".to_string())
+            };
+
+            if let Some(edex_type) = edex_entry_type(&path, &name, &category, app) {
+                entry_type = edex_type;
+            }
+
+            FilesystemEntry {
+                name,
+                path: path_to_string(&path),
+                entry_type,
+                category,
+                hidden,
+                size: metadata.is_file().then_some(metadata.len()),
+                last_accessed: path_modified_millis(&metadata),
+            }
+        }
+        Err(_) => FilesystemEntry {
+            name,
+            path: path_to_string(&path),
+            entry_type: "system".to_string(),
+            category: "other".to_string(),
+            hidden: true,
+            size: None,
+            last_accessed: None,
+        },
+    }
+}
+
+fn disks_by_mount_prefix(path: &Path) -> Vec<FilesystemUsage> {
+    let mut disks = Disks::new_with_refreshed_list()
+        .list()
+        .iter()
+        .filter_map(|disk| {
+            let mount = disk.mount_point();
+            if !path.starts_with(mount) {
+                return None;
+            }
+
+            let total_space = disk.total_space();
+            let available_space = disk.available_space();
+            let used_space = total_space.saturating_sub(available_space);
+            let used_percent = if total_space == 0 {
+                0.0
+            } else {
+                used_space as f64 / total_space as f64 * 100.0
+            };
+
+            Some(FilesystemUsage {
+                name: disk.name().to_string_lossy().into_owned(),
+                mount: path_to_string(mount),
+                total_space,
+                available_space,
+                used_space,
+                used_percent,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    disks.sort_by(|left, right| right.mount.len().cmp(&left.mount.len()));
+    disks
 }
 
 fn ensure_default_config(app: &AppHandle) -> Result<BootstrapConfig, String> {
@@ -1078,6 +1244,88 @@ fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, St
 }
 
 #[tauri::command]
+fn list_filesystem_directory(app: AppHandle, path: String) -> Result<Vec<FilesystemEntry>, String> {
+    let dir = PathBuf::from(&path);
+    let mut entries = fs::read_dir(&dir)
+        .map_err(|err| format!("failed to read {}: {err}", dir.display()))?
+        .map(|entry| {
+            entry
+                .map(|entry| filesystem_entry_from_path(entry.path(), &app))
+                .map_err(|err| format!("failed to read entry in {}: {err}", dir.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let ordering = |category: &str| match category {
+        "dir" => 0,
+        "symlink" => 1,
+        "file" => 2,
+        _ => 3,
+    };
+
+    entries.sort_by(|left, right| {
+        ordering(&left.category)
+            .cmp(&ordering(&right.category))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    Ok(entries)
+}
+
+#[tauri::command]
+fn list_filesystem_devices() -> Vec<FilesystemDevice> {
+    let mut devices = Disks::new_with_refreshed_list()
+        .list()
+        .iter()
+        .map(|disk| {
+            let mount = disk.mount_point();
+            FilesystemDevice {
+                name: format!(
+                    "{} ({})",
+                    path_to_string(mount),
+                    disk.name().to_string_lossy()
+                ),
+                path: path_to_string(mount),
+                entry_type: "disk".to_string(),
+                total_space: disk.total_space(),
+                available_space: disk.available_space(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    devices.sort_by(|left, right| left.path.cmp(&right.path));
+    devices
+}
+
+#[tauri::command]
+fn get_filesystem_usage(path: String) -> Result<Option<FilesystemUsage>, String> {
+    let path = PathBuf::from(path);
+    let canonical = path.canonicalize().unwrap_or(path);
+    Ok(disks_by_mount_prefix(&canonical).into_iter().next())
+}
+
+#[tauri::command]
+fn open_path_external(path: String) -> Result<(), String> {
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", &path]);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg(&path);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(&path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("failed to open {path}: {err}"))
+}
+
+#[tauri::command]
 fn spawn_terminal(
     app: AppHandle,
     state: State<'_, TerminalManager>,
@@ -1393,6 +1641,10 @@ pub fn run() {
             restart_app,
             get_platform_info,
             system_information_call,
+            list_filesystem_directory,
+            list_filesystem_devices,
+            get_filesystem_usage,
+            open_path_external,
             spawn_terminal,
             write_terminal,
             resize_terminal,
