@@ -13,6 +13,7 @@ import {
   type ShortcutConfig,
   type ThemeConfig,
 } from "./backend";
+import type { FilesystemDisplay } from "./filesystem";
 import { Keyboard } from "./keyboard";
 import type { TauriTerminal } from "./terminal";
 
@@ -30,6 +31,7 @@ declare global {
     _loadTheme: (theme: ThemeConfig) => void;
     themeChanger: (theme: string) => void;
     remakeKeyboard: (layout: string) => void | Promise<void>;
+    fsDisp?: FilesystemDisplay;
     useAppShortcut: (action: string) => boolean;
     focusShellTab: (number: number) => void;
     registerKeyboardShortcuts: () => void;
@@ -46,6 +48,7 @@ window.term = {};
 let mainTerminal: TauriTerminal | null = null;
 let resizeFrame: number | null = null;
 let terminalClassPromise: Promise<typeof TauriTerminal> | null = null;
+let filesystemClassPromise: Promise<typeof FilesystemDisplay> | null = null;
 let registeredShortcuts: ShortcutConfig[] = [];
 const MAX_TERMINALS = 5;
 
@@ -201,6 +204,11 @@ function loadTerminalClass() {
   return terminalClassPromise;
 }
 
+function loadFilesystemClass() {
+  filesystemClassPromise ??= import("./filesystem").then((module) => module.FilesystemDisplay);
+  return filesystemClassPromise;
+}
+
 function setShellTabText(number: number, text: string) {
   const tab = document.getElementById(`shell_tab${number}`);
   if (!tab) return;
@@ -245,8 +253,7 @@ async function createTerminal(number: number) {
 
   term.oncwdchange = (cwd) => {
     if (window.currentTerm !== number || !cwd) return;
-    const title = document.getElementById("fs_disp_title_dir");
-    if (title) title.textContent = cwd;
+    window.fsDisp?.handleCwd(cwd);
   };
   term.onprocesschange = (processName) => {
     setShellTabText(number, number === 0 ? `MAIN - ${processName || "PTY"}` : `#${number + 1} - ${processName || "PTY"}`);
@@ -315,6 +322,13 @@ async function initTerminalBackend() {
 
   window.addEventListener("beforeunload", () => {
     void mainTerminal?.shutdownBackend();
+  });
+}
+
+async function initFilesystemDisplay() {
+  const FilesystemClass = await loadFilesystemClass();
+  window.fsDisp = new FilesystemClass({
+    parentId: "filesystem",
   });
 }
 
@@ -475,11 +489,11 @@ window.useAppShortcut = (action: string) => {
       console.warn("Fuzzy search is not ported yet");
       return false;
     case "FS_LIST_VIEW":
-      document.getElementById("filesystem")?.classList.toggle("list-view");
+      window.fsDisp?.toggleListview();
       return true;
     case "FS_DOTFILES":
-      console.warn("Filesystem dotfile toggle is not ported yet");
-      return false;
+      window.fsDisp?.toggleHidedotfiles();
+      return true;
     case "KB_PASSMODE":
       window.keyboard?.togglePasswordMode();
       return true;
@@ -526,7 +540,7 @@ window.addEventListener("DOMContentLoaded", () => {
     .then(async () => {
       window.registerKeyboardShortcuts();
       await initKeyboard();
-      initTerminalBackend().catch((error) => {
+      initTerminalBackend().then(initFilesystemDisplay).catch((error) => {
         const terminal = document.getElementById("terminal0");
         if (terminal) {
           terminal.textContent = `terminal failed to initialize\n\n${String(error)}`;
