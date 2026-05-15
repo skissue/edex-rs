@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import enUsLayout from "./assets/kb_layouts/en-US.json";
 
 type KeySpec = {
@@ -8,6 +9,34 @@ type KeySpec = {
   alt_name?: string;
   altshift_name?: string;
 };
+
+type EdexPaths = {
+  settingsDir: string;
+  themesDir: string;
+  keyboardsDir: string;
+  fontsDir: string;
+  settingsFile: string;
+  shortcutsFile: string;
+  lastWindowStateFile: string;
+};
+
+type BootstrapConfig = {
+  paths: EdexPaths;
+  settings: Record<string, unknown>;
+  shortcuts: Array<Record<string, unknown>>;
+  lastWindowState: Record<string, unknown>;
+};
+
+declare global {
+  interface Window {
+    edexBoot?: BootstrapConfig;
+  }
+}
+
+async function loadBootstrapConfig() {
+  window.edexBoot = await invoke<BootstrapConfig>("get_bootstrap_config");
+  console.info("Loaded eDEX config", window.edexBoot);
+}
 
 function updateClock() {
   const clock = document.querySelector<HTMLElement>("#skeleton-clock");
@@ -80,6 +109,9 @@ function renderKeyboard() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  loadBootstrapConfig().catch((error) => {
+    console.error("Failed to load eDEX config", error);
+  });
   renderKeyboard();
   updateClock();
   window.setInterval(updateClock, 1000);
