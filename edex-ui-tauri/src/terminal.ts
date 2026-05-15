@@ -9,6 +9,7 @@ import {
   spawnTerminal,
   writeTerminal,
   type JsonObject,
+  type TerminalCwdEvent,
   type TerminalDataEvent,
   type TerminalExitEvent,
   type TerminalSessionInfo,
@@ -141,6 +142,13 @@ export class TauriTerminal {
         if (this.id === null && !this.starting) return;
         if (this.id !== null && event.payload.id !== this.id) return;
         this.term.write(event.payload.data);
+      }),
+    );
+    this.unlisteners.push(
+      await listen<TerminalCwdEvent>("terminal:cwd", (event) => {
+        if (event.payload.id !== this.id) return;
+        this.cwd = event.payload.cwd;
+        this.oncwdchange(this.cwd);
       }),
     );
     this.unlisteners.push(

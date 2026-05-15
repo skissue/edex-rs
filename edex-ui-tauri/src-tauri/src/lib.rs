@@ -11,7 +11,7 @@ use std::{
         Mutex,
     },
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
@@ -308,6 +308,13 @@ struct TerminalDataEvent {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct TerminalCwdEvent {
+    id: u32,
+    cwd: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct TerminalExitEvent {
     id: u32,
     code: u32,
@@ -357,11 +364,11 @@ impl TerminalManager {
     }
 }
 
-fn default_settings(config_dir: &Path) -> Value {
+fn default_settings(default_cwd: &Path) -> Value {
     json!({
         "shell": if cfg!(target_os = "windows") { "powershell.exe" } else { "bash" },
         "shellArgs": "",
-        "cwd": config_dir,
+        "cwd": default_cwd,
         "keyboard": "en-US",
         "theme": "tron",
         "termFontSize": 15,
@@ -627,6 +634,7 @@ fn env_overrides_from_settings(settings: &Value) -> HashMap<String, String> {
 fn prepare_terminal_launch(
     settings: &Value,
     metadata: &AppMetadata,
+    settings_dir: &Path,
 ) -> Result<TerminalLaunchConfig, String> {
     let shell =
         settings
@@ -639,11 +647,8 @@ fn prepare_terminal_launch(
             });
     let resolved_shell = resolve_shell(shell)?;
 
-    let cwd = settings
-        .get("cwd")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "settings.cwd must be a string".to_string())?;
-    if !Path::new(cwd).exists() {
+    let cwd = resolve_terminal_cwd(settings, settings_dir)?;
+    if !Path::new(&cwd).exists() {
         return Err(format!("configured cwd path does not exist: {cwd}"));
     }
 
@@ -670,10 +675,64 @@ fn prepare_terminal_launch(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        cwd: cwd.to_string(),
+        cwd,
         env: env_vars,
         port,
     })
+}
+
+fn default_terminal_cwd(settings_dir: &Path) -> PathBuf {
+    env::current_dir()
+        .ok()
+        .filter(|path| path.exists())
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.exists())
+        })
+        .or_else(|| {
+            env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .filter(|path| path.exists())
+        })
+        .unwrap_or_else(|| settings_dir.to_path_buf())
+}
+
+fn paths_refer_to_same_location(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn resolve_terminal_cwd(settings: &Value, settings_dir: &Path) -> Result<String, String> {
+    let default_cwd = default_terminal_cwd(settings_dir);
+    let configured = settings
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if configured.is_empty() || paths_refer_to_same_location(Path::new(configured), settings_dir) {
+        return Ok(path_to_string(&default_cwd));
+    }
+
+    Ok(configured.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_cwd(pid: u32) -> Option<String> {
+    fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .map(|path| path_to_string(&path))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_process_cwd(_pid: u32) -> Option<String> {
+    None
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -705,7 +764,10 @@ fn ensure_default_config(app: &AppHandle) -> Result<BootstrapConfig, String> {
     fs::create_dir_all(&fonts_dir)
         .map_err(|err| format!("failed to create {}: {err}", fonts_dir.display()))?;
 
-    write_json_if_missing(&settings_file, &default_settings(&settings_dir))?;
+    write_json_if_missing(
+        &settings_file,
+        &default_settings(&default_terminal_cwd(&settings_dir)),
+    )?;
     write_json_if_missing(&shortcuts_file, &default_shortcuts())?;
     write_json_if_missing(&last_window_state_file, &default_last_window_state())?;
 
@@ -728,7 +790,7 @@ fn ensure_default_config(app: &AppHandle) -> Result<BootstrapConfig, String> {
 
     let settings = read_json(&settings_file)?;
     let version_history = update_version_history(&version_history_file, &metadata.version)?;
-    let terminal_launch = prepare_terminal_launch(&settings, &metadata)?;
+    let terminal_launch = prepare_terminal_launch(&settings, &metadata, &settings_dir)?;
 
     Ok(BootstrapConfig {
         paths,
@@ -852,7 +914,8 @@ fn prepare_terminal_environment(
     settings: Value,
 ) -> Result<TerminalLaunchConfig, String> {
     let metadata = app_metadata(&app);
-    prepare_terminal_launch(&settings, &metadata)
+    let settings_dir = config_dir(&app)?;
+    prepare_terminal_launch(&settings, &metadata, &settings_dir)
 }
 
 fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
@@ -1021,7 +1084,8 @@ fn spawn_terminal(
     request: SpawnTerminalRequest,
 ) -> Result<TerminalSessionInfo, String> {
     let metadata = app_metadata(&app);
-    let launch = prepare_terminal_launch(&request.settings, &metadata)?;
+    let settings_dir = config_dir(&app)?;
+    let launch = prepare_terminal_launch(&request.settings, &metadata, &settings_dir)?;
     let cols = request.cols.unwrap_or(80).max(1);
     let rows = request.rows.unwrap_or(24).max(1);
     let pty_system = native_pty_system();
@@ -1091,6 +1155,30 @@ fn spawn_terminal(
             }
         }
     });
+
+    if let Some(cwd_pid) = pid {
+        let cwd_app = app.clone();
+        let mut last_cwd = launch.cwd.clone();
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_millis(500));
+            let is_alive = cwd_app
+                .state::<TerminalManager>()
+                .sessions
+                .lock()
+                .map(|sessions| sessions.contains_key(&id))
+                .unwrap_or(false);
+            if !is_alive {
+                break;
+            }
+
+            if let Some(cwd) = read_process_cwd(cwd_pid) {
+                if cwd != last_cwd {
+                    last_cwd = cwd.clone();
+                    let _ = cwd_app.emit("terminal:cwd", TerminalCwdEvent { id, cwd });
+                }
+            }
+        });
+    }
 
     let wait_app = app.clone();
     thread::spawn(move || match child.wait() {

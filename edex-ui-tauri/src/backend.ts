@@ -50,6 +50,11 @@ export type TerminalDataEvent = {
   data: string;
 };
 
+export type TerminalCwdEvent = {
+  id: number;
+  cwd: string;
+};
+
 export type TerminalExitEvent = {
   id: number;
   code: number;

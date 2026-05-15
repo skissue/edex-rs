@@ -230,6 +230,10 @@ async function initTerminalBackend() {
     settings: window.settings,
     theme: window.theme,
   });
+  mainTerminal.oncwdchange = (cwd) => {
+    const title = document.getElementById("fs_disp_title_dir");
+    if (title && cwd) title.textContent = cwd;
+  };
   window.term = { 0: mainTerminal };
 
   const session = await mainTerminal.start();
