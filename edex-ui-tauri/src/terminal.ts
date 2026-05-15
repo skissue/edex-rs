@@ -66,8 +66,12 @@ export class TauriTerminal {
   private readonly parent: HTMLElement;
   private readonly settings: JsonObject;
   private readonly unlisteners: UnlistenFn[] = [];
+  private readonly resizeObserver?: ResizeObserver;
   private id: number | null = null;
   private starting = false;
+  private fitFrame: number | null = null;
+  private lastCols = 0;
+  private lastRows = 0;
 
   cwd = "";
   oncwdchange: (cwd: string | null) => void = () => undefined;
@@ -122,6 +126,11 @@ export class TauriTerminal {
     this.parent.querySelectorAll(".xterm-helper-textarea").forEach((textarea) => {
       textarea.setAttribute("readonly", "readonly");
     });
+
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
+      this.resizeObserver.observe(this.parent);
+    }
   }
 
   async start() {
@@ -152,21 +161,35 @@ export class TauriTerminal {
     this.oncwdchange(this.cwd);
     this.onprocesschange?.(session.pid === null ? "PTY" : String(session.pid));
     this.starting = false;
+    this.scheduleFit();
     this.term.focus();
     return session;
   }
 
   fit() {
+    if (!this.parent.classList.contains("active")) return;
+
     try {
       this.fitAddon.fit();
     } catch (error) {
       console.warn("Failed to fit terminal", error);
     }
-    if (this.id !== null) {
+
+    if (this.id !== null && (this.term.cols !== this.lastCols || this.term.rows !== this.lastRows)) {
+      this.lastCols = this.term.cols;
+      this.lastRows = this.term.rows;
       resizeTerminal(this.id, this.term.cols, this.term.rows).catch((error) => {
         console.error("Failed to resize terminal", error);
       });
     }
+  }
+
+  scheduleFit() {
+    if (this.fitFrame !== null) window.cancelAnimationFrame(this.fitFrame);
+    this.fitFrame = window.requestAnimationFrame(() => {
+      this.fitFrame = null;
+      this.fit();
+    });
   }
 
   write(data: string) {
@@ -185,6 +208,11 @@ export class TauriTerminal {
   }
 
   async dispose() {
+    this.resizeObserver?.disconnect();
+    if (this.fitFrame !== null) {
+      window.cancelAnimationFrame(this.fitFrame);
+      this.fitFrame = null;
+    }
     for (const unlisten of this.unlisteners.splice(0)) unlisten();
     if (this.id !== null) {
       await killTerminal(this.id).catch((error) => {

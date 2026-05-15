@@ -43,6 +43,7 @@ window.currentTerm = 0;
 window.term = {};
 
 let mainTerminal: TauriTerminal | null = null;
+let resizeFrame: number | null = null;
 
 window.eval = () => {
   throw new Error("eval() is disabled for security reasons.");
@@ -187,6 +188,10 @@ function waitForFonts() {
   });
 }
 
+function activeTerminal() {
+  return window.term?.[window.currentTerm || 0] as TauriTerminal | undefined;
+}
+
 async function loadBootstrapConfig() {
   const boot = await getBootstrapConfig();
   const themeOverride = await getThemeOverride();
@@ -275,6 +280,10 @@ window.focusShellTab = (number: number) => {
 
   document.querySelectorAll("div#main_shell_innercontainer > pre").forEach((terminal) => terminal.classList.remove("active"));
   document.getElementById(`terminal${number}`)?.classList.add("active");
+  window.currentTerm = number;
+  activeTerminal()?.scheduleFit();
+  activeTerminal()?.term.focus();
+  activeTerminal()?.resendCWD();
 };
 
 window.useAppShortcut = (action: string) => {
@@ -317,7 +326,11 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("resize", () => {
-  window.term?.[window.currentTerm || 0]?.fit?.();
+  if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = null;
+    activeTerminal()?.scheduleFit();
+  });
 });
 
 window.addEventListener("DOMContentLoaded", () => {
