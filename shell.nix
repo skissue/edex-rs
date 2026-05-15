@@ -5,14 +5,32 @@ mkShell {
     nodejs_20
     node-gyp
     python311
+    rustc
+    cargo
+    rustfmt
+    clippy
+    cargo-tauri
     pkg-config
     gcc
     gnumake
     rsync
     git
     just
+    curl
+    wget
+    file
+    xdg-utils
+    xvfb-run
   ];
   buildInputs = [
+    # Tauri runtime/build deps
+    webkitgtk_4_1
+    libsoup_3
+    openssl
+    libayatana-appindicator
+    librsvg
+    xdotool
+
     # Native module deps
     libsecret
 
@@ -60,6 +78,7 @@ mkShell {
     export npm_config_openssl_fips=""
     # Ensure native modules and electron find runtime libs
     export LD_LIBRARY_PATH="${lib.makeLibraryPath [
+      webkitgtk_4_1 libsoup_3 openssl libayatana-appindicator librsvg xdotool
       glib nss nspr at-spi2-atk at-spi2-core cups dbus expat libdrm mesa libgbm
       libxkbcommon pango cairo alsa-lib gtk3 gdk-pixbuf libnotify libGL libuuid
       libx11 libxcomposite libxdamage libxext libxfixes libxrandr libxcb
