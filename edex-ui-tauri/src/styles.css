@@ -112,6 +112,24 @@ div#mod_cpuinfo_innercontainer > h1:first-child > i {
   white-space: nowrap;
 }
 
+section#mod_column_right {
+  max-height: 74vh;
+}
+
+section#mod_column_right div#mod_globe canvas,
+section#mod_column_right div#mod_globe_canvas_placeholder {
+  width: 90%;
+}
+
+section#mod_column_right div#mod_globe canvas,
+section#mod_column_right div#mod_globe_canvas_placeholder {
+  margin-top: -2vh;
+}
+
+section#mod_column_right div#mod_conninfo canvas {
+  height: 6.4vh;
+}
+
 .skeleton-module {
   min-height: 11vh;
   border-top: 0.092vh solid rgba(var(--color_r), var(--color_g), var(--color_b), 0.3);

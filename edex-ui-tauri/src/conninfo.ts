@@ -33,7 +33,7 @@ export class Conninfo {
                 <canvas id="mod_conninfo_canvas_bottom"></canvas>
                 <h3>OFFLINE</h3>
             </div>`;
-    this.parent.insertBefore(this.element, document.getElementById("mod_globe"));
+    this.parent.append(this.element);
 
     this.current = document.querySelector("#mod_conninfo_innercontainer > h1 > i");
     this.total = document.querySelector("#mod_conninfo_innercontainer > h2 > i");

@@ -427,8 +427,13 @@ async function initLeftColumnModules() {
 
 async function initRightColumnModules() {
   try {
-    const [{ Netstat }, { Conninfo }] = await Promise.all([import("./netstat"), import("./conninfo")]);
+    const [{ Netstat }, { LocationGlobe }, { Conninfo }] = await Promise.all([
+      import("./netstat"),
+      import("./locationGlobe"),
+      import("./conninfo"),
+    ]);
     window.mods.netstat = new Netstat("mod_column_right");
+    window.mods.globe = new LocationGlobe("mod_column_right");
     window.mods.conninfo = new Conninfo("mod_column_right");
   } catch (error) {
     console.error("Failed to initialize right column modules", error);
