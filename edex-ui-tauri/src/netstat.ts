@@ -1,13 +1,15 @@
-import { getNetworkStatus, type NetworkStatus } from "./backend";
+import { getExternalIpInfo, getNetworkStatus, type GeoLocation, type NetworkStatus } from "./backend";
 
 export class Netstat {
   parent: HTMLElement;
   offline = false;
   iface: string | null = null;
   internalIPv4: string | null = null;
-  ipinfo: { ip: string; geo: unknown } | null = null;
+  ipinfo: { ip: string; geo: GeoLocation | null } | null = null;
   geoLookup = { get: () => null };
   private currentlyUpdating = false;
+  private externalInfoUpdating = false;
+  private runsBeforeGeoIPUpdate = 0;
   private infoUpdater: number;
 
   constructor(parentId: string) {
@@ -68,19 +70,49 @@ export class Netstat {
     }
 
     this.iface = status.iface;
+    const fallbackIp = status.displayIp4 || status.ip4;
+    if (status.ip4 !== this.internalIPv4) {
+      this.runsBeforeGeoIPUpdate = 0;
+      this.ipinfo = { ip: fallbackIp, geo: null };
+    } else if (!this.ipinfo) {
+      this.ipinfo = { ip: fallbackIp, geo: null };
+    }
     this.internalIPv4 = status.ip4;
-    this.ipinfo = { ip: status.displayIp4 || status.ip4, geo: null };
     this.setText("#mod_netstat_iname", `Interface: ${status.iface}`);
 
     if (!status.online || status.pingMs === null) {
-      this.setOffline(status.displayIp4 || status.ip4);
+      this.setOffline(fallbackIp);
       return;
     }
 
     this.offline = false;
     this.setText("#mod_netstat_innercontainer > div:first-child > h2", "ONLINE");
-    this.setText("#mod_netstat_innercontainer > div:nth-child(2) > h2", status.displayIp4 || status.ip4);
+    this.setText("#mod_netstat_innercontainer > div:nth-child(2) > h2", this.ipinfo.ip);
     this.setText("#mod_netstat_innercontainer > div:nth-child(3) > h2", `${Math.round(status.pingMs)}ms`);
+
+    if (this.runsBeforeGeoIPUpdate === 0) {
+      void this.updateExternalInfo(fallbackIp);
+    } else {
+      this.runsBeforeGeoIPUpdate -= 1;
+    }
+  }
+
+  private async updateExternalInfo(fallbackIp: string) {
+    if (this.externalInfoUpdating) return;
+    this.externalInfoUpdating = true;
+
+    try {
+      const external = await getExternalIpInfo();
+      this.ipinfo = { ip: external.ip, geo: external.geo };
+      this.setText("#mod_netstat_innercontainer > div:nth-child(2) > h2", external.ip);
+      this.runsBeforeGeoIPUpdate = 10;
+    } catch (error) {
+      console.warn("Failed to update external IP info", error);
+      if (!this.ipinfo) this.ipinfo = { ip: fallbackIp, geo: null };
+      this.runsBeforeGeoIPUpdate = 3;
+    } finally {
+      this.externalInfoUpdating = false;
+    }
   }
 
   private setOffline(ip4 = "--.--.--.--") {

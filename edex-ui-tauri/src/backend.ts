@@ -160,6 +160,16 @@ export type NetworkStatsInfo = {
   txSec: number;
 };
 
+export type GeoLocation = {
+  latitude: number;
+  longitude: number;
+};
+
+export type ExternalIpInfo = {
+  ip: string;
+  geo: GeoLocation | null;
+};
+
 export type SystemMetrics = {
   cpu: CpuMetrics;
   memory: MemoryMetrics;
@@ -361,6 +371,10 @@ export function getNetworkStatus(iface?: string, pingAddr?: string) {
 
 export function getNetworkStats(iface: string) {
   return invoke<NetworkStatsInfo | null>("get_network_stats", { iface });
+}
+
+export function getExternalIpInfo() {
+  return invoke<ExternalIpInfo>("get_external_ip_info");
 }
 
 export function getMonitors() {

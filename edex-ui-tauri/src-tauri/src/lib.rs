@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -453,6 +453,29 @@ struct NetworkStatsInfo {
     tx_bytes: u64,
     rx_sec: u64,
     tx_sec: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeoLocation {
+    latitude: f64,
+    longitude: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalIpInfo {
+    ip: String,
+    geo: Option<GeoLocation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IpApiResponse {
+    status: String,
+    message: Option<String>,
+    query: Option<String>,
+    lat: Option<f64>,
+    lon: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1938,6 +1961,74 @@ fn tcp_ping_ms(target: &str, port: u16) -> Result<f64, String> {
     Ok(start.elapsed().as_secs_f64() * 1000.0)
 }
 
+fn http_get(host: &str, path: &str, timeout: Duration) -> Result<String, String> {
+    let addr = (host, 80)
+        .to_socket_addrs()
+        .map_err(|err| format!("failed to resolve {host}: {err}"))?
+        .find(|addr| addr.is_ipv4())
+        .ok_or_else(|| format!("no IPv4 address found for {host}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)
+        .map_err(|err| format!("failed to connect to {host}: {err}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|err| format!("failed to set read timeout: {err}"))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|err| format!("failed to set write timeout: {err}"))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: eDEX-UI-Tauri\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("failed to write request to {host}: {err}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|err| format!("failed to read response from {host}: {err}"))?;
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| format!("invalid HTTP response from {host}"))?;
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        return Err(format!(
+            "unexpected HTTP response from {host}: {}",
+            headers.lines().next().unwrap_or("unknown status")
+        ));
+    }
+
+    Ok(body.to_string())
+}
+
+fn fetch_external_ip_info() -> Result<ExternalIpInfo, String> {
+    let body = http_get(
+        "ip-api.com",
+        "/json/?fields=status,message,query,lat,lon",
+        Duration::from_millis(1900),
+    )?;
+    let response = serde_json::from_str::<IpApiResponse>(&body)
+        .map_err(|err| format!("failed to parse external IP response: {err}"))?;
+    if response.status != "success" {
+        return Err(response
+            .message
+            .unwrap_or_else(|| "external IP lookup failed".to_string()));
+    }
+
+    let ip = response
+        .query
+        .filter(|ip| !ip.trim().is_empty())
+        .ok_or_else(|| "external IP lookup did not return an IP".to_string())?;
+    let geo = match (response.lat, response.lon) {
+        (Some(latitude), Some(longitude)) => Some(GeoLocation {
+            latitude,
+            longitude,
+        }),
+        _ => None,
+    };
+
+    Ok(ExternalIpInfo { ip, geo })
+}
+
 #[tauri::command]
 fn get_network_status(
     state: State<'_, BackendState>,
@@ -1980,6 +2071,13 @@ fn get_network_status(
         ping_ms,
         interfaces,
     })
+}
+
+#[tauri::command]
+async fn get_external_ip_info() -> Result<ExternalIpInfo, String> {
+    tauri::async_runtime::spawn_blocking(fetch_external_ip_info)
+        .await
+        .map_err(|err| format!("external IP lookup task failed: {err}"))?
 }
 
 #[tauri::command]
@@ -2421,6 +2519,7 @@ pub fn run() {
             get_memory_metrics,
             get_process_metrics,
             get_network_status,
+            get_external_ip_info,
             get_network_stats,
             get_system_metrics,
             system_information_call,
