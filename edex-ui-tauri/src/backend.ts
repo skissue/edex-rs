@@ -170,6 +170,11 @@ export type ExternalIpInfo = {
   geo: GeoLocation | null;
 };
 
+export type NetworkConnectionInfo = {
+  peerAddress: string;
+  state: string;
+};
+
 export type SystemMetrics = {
   cpu: CpuMetrics;
   memory: MemoryMetrics;
@@ -375,6 +380,14 @@ export function getNetworkStats(iface: string) {
 
 export function getExternalIpInfo() {
   return invoke<ExternalIpInfo>("get_external_ip_info");
+}
+
+export function lookupIpGeo(ip: string) {
+  return invoke<GeoLocation | null>("lookup_ip_geo", { ip });
+}
+
+export function getNetworkConnections() {
+  return invoke<NetworkConnectionInfo[]>("get_network_connections");
 }
 
 export function getMonitors() {

@@ -455,7 +455,7 @@ struct NetworkStatsInfo {
     tx_sec: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GeoLocation {
     latitude: f64,
@@ -476,6 +476,13 @@ struct IpApiResponse {
     query: Option<String>,
     lat: Option<f64>,
     lon: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkConnectionInfo {
+    peer_address: String,
+    state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2000,33 +2007,106 @@ fn http_get(host: &str, path: &str, timeout: Duration) -> Result<String, String>
     Ok(body.to_string())
 }
 
+fn fetch_ip_api(path: &str) -> Result<IpApiResponse, String> {
+    let body = http_get("ip-api.com", path, Duration::from_millis(1900))?;
+    serde_json::from_str::<IpApiResponse>(&body)
+        .map_err(|err| format!("failed to parse IP location response: {err}"))
+}
+
+fn geo_from_ip_api_response(response: &IpApiResponse) -> Option<GeoLocation> {
+    match (response.lat, response.lon) {
+        (Some(latitude), Some(longitude)) => Some(GeoLocation {
+            latitude,
+            longitude,
+        }),
+        _ => None,
+    }
+}
+
 fn fetch_external_ip_info() -> Result<ExternalIpInfo, String> {
-    let body = http_get(
-        "ip-api.com",
-        "/json/?fields=status,message,query,lat,lon",
-        Duration::from_millis(1900),
-    )?;
-    let response = serde_json::from_str::<IpApiResponse>(&body)
-        .map_err(|err| format!("failed to parse external IP response: {err}"))?;
+    let response = fetch_ip_api("/json/?fields=status,message,query,lat,lon")?;
     if response.status != "success" {
         return Err(response
             .message
             .unwrap_or_else(|| "external IP lookup failed".to_string()));
     }
 
+    let geo = geo_from_ip_api_response(&response);
     let ip = response
         .query
         .filter(|ip| !ip.trim().is_empty())
         .ok_or_else(|| "external IP lookup did not return an IP".to_string())?;
-    let geo = match (response.lat, response.lon) {
-        (Some(latitude), Some(longitude)) => Some(GeoLocation {
-            latitude,
-            longitude,
-        }),
-        _ => None,
-    };
 
     Ok(ExternalIpInfo { ip, geo })
+}
+
+fn fetch_ip_geo(ip: String) -> Result<Option<GeoLocation>, String> {
+    ip.parse::<Ipv4Addr>()
+        .map_err(|err| format!("invalid IPv4 address '{ip}': {err}"))?;
+    let response = fetch_ip_api(&format!("/json/{ip}?fields=status,message,lat,lon"))?;
+    if response.status != "success" {
+        return Err(response
+            .message
+            .unwrap_or_else(|| format!("location lookup failed for {ip}")));
+    }
+
+    Ok(geo_from_ip_api_response(&response))
+}
+
+fn parse_proc_tcp_peer(hex: &str) -> Option<Ipv4Addr> {
+    let raw = u32::from_str_radix(hex, 16).ok()?;
+    Some(Ipv4Addr::from(raw.to_le_bytes()))
+}
+
+fn read_proc_tcp_connections(path: &str) -> Vec<NetworkConnectionInfo> {
+    fs::read_to_string(path)
+        .map(|contents| {
+            contents
+                .lines()
+                .skip(1)
+                .filter_map(|line| {
+                    let mut parts = line.split_whitespace();
+                    let _slot = parts.next()?;
+                    let _local = parts.next()?;
+                    let remote = parts.next()?;
+                    let state = parts.next()?;
+                    if state != "01" {
+                        return None;
+                    }
+
+                    let (address_hex, _port_hex) = remote.split_once(':')?;
+                    let peer = parse_proc_tcp_peer(address_hex)?;
+                    if peer.is_unspecified() || peer.is_loopback() {
+                        return None;
+                    }
+
+                    Some(NetworkConnectionInfo {
+                        peer_address: peer.to_string(),
+                        state: "ESTABLISHED".to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_network_connections() -> Vec<NetworkConnectionInfo> {
+    let mut connections = read_proc_tcp_connections("/proc/net/tcp");
+    connections.sort_by(|a, b| a.peer_address.cmp(&b.peer_address));
+    connections.dedup_by(|a, b| a.peer_address == b.peer_address);
+    connections
+}
+
+#[tauri::command]
+async fn lookup_ip_geo(ip: String) -> Result<Option<GeoLocation>, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_ip_geo(ip))
+        .await
+        .map_err(|err| format!("IP location lookup task failed: {err}"))?
+}
+
+#[tauri::command]
+fn get_network_connections() -> Vec<NetworkConnectionInfo> {
+    read_network_connections()
 }
 
 #[tauri::command]
@@ -2520,6 +2600,8 @@ pub fn run() {
             get_process_metrics,
             get_network_status,
             get_external_ip_info,
+            lookup_ip_geo,
+            get_network_connections,
             get_network_stats,
             get_system_metrics,
             system_information_call,

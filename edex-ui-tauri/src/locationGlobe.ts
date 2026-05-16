@@ -1,3 +1,4 @@
+import { getNetworkConnections, lookupIpGeo, type GeoLocation } from "./backend";
 import gridData from "./assets/misc/grid.json";
 import "./assets/vendor/encom-globe.js";
 
@@ -63,7 +64,10 @@ export class LocationGlobe {
   private animateFrame: number | null = null;
   private animateTimer: number | null = null;
   private locUpdater: number | null = null;
+  private connsUpdater: number | null = null;
   private resizeHandler: (() => void) | null = null;
+  private geoCache = new Map<string, GeoLocation | null>();
+  private geoLookups = new Set<string>();
 
   constructor(parentId: string) {
     if (!parentId) throw new Error("Missing parameters");
@@ -88,6 +92,10 @@ export class LocationGlobe {
     window.setTimeout(() => {
       this.updateLoc();
       this.locUpdater = window.setInterval(() => this.updateLoc(), 1000);
+      void this.updateConns();
+      this.connsUpdater = window.setInterval(() => {
+        void this.updateConns();
+      }, 3000);
     }, 4000);
   }
 
@@ -181,6 +189,45 @@ export class LocationGlobe {
     this.addRandomConnectedMarkers();
   }
 
+  async addConn(ip: string) {
+    if (!this.globe || this.conns.some((conn) => conn.ip === ip) || this.geoLookups.has(ip)) return;
+
+    let geo = this.geoCache.get(ip);
+    if (typeof geo === "undefined") {
+      this.geoLookups.add(ip);
+      try {
+        geo = await lookupIpGeo(ip);
+        this.geoCache.set(ip, geo);
+      } catch (error) {
+        console.warn(`Failed to locate connection peer ${ip}`, error);
+        geo = null;
+        this.geoCache.set(ip, null);
+      } finally {
+        this.geoLookups.delete(ip);
+      }
+    }
+
+    if (typeof geo?.latitude === "number" && typeof geo.longitude === "number" && this.globe) {
+      if (geo.latitude < -90 || geo.latitude > 90 || geo.longitude < -180 || geo.longitude > 180) return;
+      try {
+        this.conns.push({
+          ip,
+          pin: this.globe.addPin(geo.latitude, geo.longitude, "", 1.2),
+        });
+      } catch (error) {
+        console.warn(`Failed to add connection pin for ${ip}`, error);
+        this.geoCache.set(ip, null);
+      }
+    }
+  }
+
+  removeConn(ip: string) {
+    const index = this.conns.findIndex((conn) => conn.ip === ip);
+    if (index === -1) return;
+    this.conns[index].pin.remove();
+    this.conns.splice(index, 1);
+  }
+
   removeMarkers() {
     if (!this.globe) return;
     this.globe.markers.forEach((marker) => marker.remove());
@@ -239,8 +286,35 @@ export class LocationGlobe {
     this.element.setAttribute("class", "");
   }
 
-  updateConns() {
-    return false;
+  async updateConns() {
+    const netstat = window.mods.netstat as NetstatLike | undefined;
+    if (!this.globe || netstat?.offline !== false) return false;
+
+    try {
+      const connections = await getNetworkConnections();
+      const newconns = Array.from(
+        new Set(
+          connections
+            .filter((conn) => conn.state === "ESTABLISHED" && conn.peerAddress !== "0.0.0.0" && conn.peerAddress !== "127.0.0.1")
+            .map((conn) => conn.peerAddress),
+        ),
+      );
+
+      this.conns.forEach((conn) => {
+        if (!newconns.includes(conn.ip)) this.removeConn(conn.ip);
+      });
+
+      newconns
+        .filter((ip) => !this.conns.some((conn) => conn.ip === ip))
+        .slice(0, 5)
+        .forEach((ip) => {
+          void this.addConn(ip);
+        });
+    } catch (error) {
+      console.warn("Failed to update network connection pins", error);
+    }
+
+    return true;
   }
 
   private setHeaderInfo(text: string) {
@@ -250,6 +324,7 @@ export class LocationGlobe {
 
   destroy() {
     if (this.locUpdater !== null) window.clearInterval(this.locUpdater);
+    if (this.connsUpdater !== null) window.clearInterval(this.connsUpdater);
     if (this.animateTimer !== null) window.clearTimeout(this.animateTimer);
     if (this.animateFrame !== null) window.cancelAnimationFrame(this.animateFrame);
     if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
