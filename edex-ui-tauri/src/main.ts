@@ -373,13 +373,26 @@ async function initFilesystemDisplay() {
 }
 
 function updateClock() {
-  const clock = document.querySelector<HTMLElement>("#skeleton-clock");
+  const clock = document.querySelector<HTMLElement>("#mod_clock_text");
   if (!clock) return;
 
-  const now = new Date();
-  const hours = now.getHours().toString().padStart(2, "0");
-  const minutes = now.getMinutes().toString().padStart(2, "0");
-  clock.innerHTML = `<span>${hours}</span><em>:</em><span>${minutes}</span>`;
+  const time = new Date();
+  const array = [time.getHours(), time.getMinutes(), time.getSeconds()];
+  let ampm = "";
+
+  if (window.settings.clockHours === 12) {
+    ampm = array[0] >= 12 ? "PM" : "AM";
+    if (array[0] > 12) array[0] = array[0] - 12;
+    if (array[0] === 0) array[0] = 12;
+  }
+
+  const padded = array.map((entry) => (entry.toString().length !== 2 ? `0${entry}` : entry.toString()));
+  let clockString = `${padded[0]}:${padded[1]}:${padded[2]}`
+    .match(/.{1}/g)!
+    .map((entry) => (entry === ":" ? `<em>${entry}</em>` : `<span>${entry}</span>`))
+    .join("");
+  if (window.settings.clockHours === 12) clockString += `<span>${ampm}</span>`;
+  clock.innerHTML = clockString;
 }
 
 async function initKeyboard(layoutName = settingAsString("keyboard", "en-US")) {
