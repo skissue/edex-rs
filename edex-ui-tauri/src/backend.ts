@@ -88,6 +88,19 @@ export type FilesystemUsage = {
   usedPercent: number;
 };
 
+export type BatteryInfo = {
+  hasBattery: boolean;
+  percent: number | null;
+  isCharging: boolean;
+  acConnected: boolean;
+};
+
+export type SysinfoSnapshot = {
+  os: string;
+  uptime: number;
+  battery: BatteryInfo;
+};
+
 export type ShortcutConfig = {
   trigger: string;
   type: "app" | "shell" | string;
@@ -248,6 +261,10 @@ export function killAllTerminals() {
 
 export function getPlatformInfo() {
   return invoke<PlatformInfo>("get_platform_info");
+}
+
+export function getSysinfoSnapshot() {
+  return invoke<SysinfoSnapshot>("get_sysinfo_snapshot");
 }
 
 export function getMonitors() {

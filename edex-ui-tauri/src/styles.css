@@ -65,6 +65,31 @@ section#keyboard {
   opacity: 1;
 }
 
+div#mod_sysinfo {
+  justify-content: space-between;
+  letter-spacing: 0.08vh;
+}
+
+div#mod_sysinfo div {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-left: 0.46vh;
+  padding-right: 0.46vh;
+}
+
+div#mod_sysinfo h1 {
+  font-size: 1.16vh;
+  line-height: 1;
+}
+
+div#mod_sysinfo h2 {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 1.42vh;
+  line-height: 1;
+}
+
 .skeleton-module {
   min-height: 11vh;
   border-top: 0.092vh solid rgba(var(--color_r), var(--color_g), var(--color_b), 0.3);

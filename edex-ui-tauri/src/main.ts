@@ -17,6 +17,7 @@ import type { FilesystemDisplay } from "./filesystem";
 import { FuzzyFinder } from "./fuzzyFinder";
 import { Keyboard } from "./keyboard";
 import { openSettings, openShortcutsHelp, writeSettingsFile } from "./settings";
+import { Sysinfo } from "./sysinfo";
 import type { TauriTerminal } from "./terminal";
 
 declare global {
@@ -38,6 +39,7 @@ declare global {
     writeSettingsFile: () => void | Promise<void>;
     fsDisp?: FilesystemDisplay;
     activeFuzzyFinder?: FuzzyFinder;
+    mods: Record<string, unknown>;
     useAppShortcut: (action: string) => boolean;
     focusShellTab: (number: number) => void;
     registerKeyboardShortcuts: () => void;
@@ -48,6 +50,7 @@ declare global {
 window.settings = {};
 window.shortcuts = [];
 window.lastWindowState = {};
+window.mods = {};
 window.currentTerm = 0;
 window.term = {};
 
@@ -598,6 +601,7 @@ window.addEventListener("DOMContentLoaded", () => {
   loadBootstrapConfig()
     .then(async () => {
       window.registerKeyboardShortcuts();
+      window.mods.sysinfo = new Sysinfo("mod_column_left");
       await initKeyboard();
       initTerminalBackend().then(initFilesystemDisplay).catch((error) => {
         logStartupError("Terminal failed to initialize", error);
