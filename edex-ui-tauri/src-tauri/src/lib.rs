@@ -7,15 +7,16 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{Read, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
         Mutex,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Components, Disks, System};
+use sysinfo::{Components, Disks, Networks, System};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
 const THEMES: &[(&str, &str)] = &[
@@ -423,6 +424,27 @@ struct ProcessMetrics {
     mem: f32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkInterfaceInfo {
+    iface: String,
+    ip4: String,
+    mac: String,
+    operstate: String,
+    internal: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkStatus {
+    iface: Option<String>,
+    ip4: Option<String>,
+    display_ip4: Option<String>,
+    online: bool,
+    ping_ms: Option<f64>,
+    interfaces: Vec<NetworkInterfaceInfo>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SystemMetrics {
@@ -436,6 +458,7 @@ struct BackendState {
     keyboard_override: Mutex<Option<String>>,
     cpu_samples: Mutex<Option<Vec<CpuStatSample>>>,
     process_system: Mutex<System>,
+    network_system: Mutex<Networks>,
 }
 
 impl Default for BackendState {
@@ -445,6 +468,7 @@ impl Default for BackendState {
             keyboard_override: Mutex::new(None),
             cpu_samples: Mutex::new(None),
             process_system: Mutex::new(System::new_all()),
+            network_system: Mutex::new(Networks::new_with_refreshed_list()),
         }
     }
 }
@@ -1424,8 +1448,9 @@ fn read_battery_info() -> BatteryInfo {
                 }
                 if let Some(status) = read_power_supply_value(&path, "status") {
                     let normalized = status.to_lowercase();
-                    is_charging =
-                        normalized == "charging" || normalized == "full" || normalized == "not charging";
+                    is_charging = normalized == "charging"
+                        || normalized == "full"
+                        || normalized == "not charging";
                 }
             } else if read_power_supply_value(&path, "online").as_deref() == Some("1") {
                 ac_connected = true;
@@ -1575,16 +1600,16 @@ fn read_cpu_max_ghz() -> Option<f64> {
 
 fn current_cpu_temperature() -> Option<f32> {
     let components = Components::new_with_refreshed_list();
-    components.iter().filter_map(|component| component.temperature()).fold(
-        None,
-        |max_temperature, temperature| {
+    components
+        .iter()
+        .filter_map(|component| component.temperature())
+        .fold(None, |max_temperature, temperature| {
             Some(
                 max_temperature
                     .map(|current_max: f32| current_max.max(temperature))
                     .unwrap_or(temperature),
             )
-        },
-    )
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -1645,7 +1670,13 @@ fn count_proc_tasks() -> usize {
         .map(|entries| {
             entries
                 .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().chars().all(|ch| ch.is_ascii_digit()))
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .chars()
+                        .all(|ch| ch.is_ascii_digit())
+                })
                 .count()
         })
         .unwrap_or(0)
@@ -1656,10 +1687,7 @@ fn count_proc_tasks() -> usize {
     0
 }
 
-fn cpu_loads_from_samples(
-    state: &State<'_, BackendState>,
-    current: &[CpuStatSample],
-) -> Vec<f32> {
+fn cpu_loads_from_samples(state: &State<'_, BackendState>, current: &[CpuStatSample]) -> Vec<f32> {
     let mut previous = match state.cpu_samples.lock() {
         Ok(previous) => previous,
         Err(_) => return vec![0.0; current.len()],
@@ -1678,7 +1706,8 @@ fn cpu_loads_from_samples(
                     if total_delta == 0 {
                         0.0
                     } else {
-                        ((total_delta.saturating_sub(idle_delta)) as f32 / total_delta as f32) * 100.0
+                        ((total_delta.saturating_sub(idle_delta)) as f32 / total_delta as f32)
+                            * 100.0
                     }
                 })
                 .collect::<Vec<_>>()
@@ -1823,6 +1852,122 @@ fn get_process_metrics(state: State<'_, BackendState>) -> Result<Vec<ProcessMetr
 
     processes.sort_by(|a, b| a.pid.cmp(&b.pid));
     Ok(processes)
+}
+
+fn interface_operstate(iface: &str) -> String {
+    fs::read_to_string(Path::new("/sys/class/net").join(iface).join("operstate"))
+        .map(|state| state.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn network_interfaces_from_state(networks: &Networks) -> Vec<NetworkInterfaceInfo> {
+    let mut interfaces = networks
+        .iter()
+        .map(|(iface, network)| {
+            let ip4 = network
+                .ip_networks()
+                .iter()
+                .find_map(|network| match network.addr {
+                    IpAddr::V4(addr) => Some(addr.to_string()),
+                    IpAddr::V6(_) => None,
+                })
+                .unwrap_or_default();
+            let mac = network.mac_address().to_string();
+            let operstate = interface_operstate(iface);
+
+            NetworkInterfaceInfo {
+                iface: iface.to_string(),
+                internal: ip4 == Ipv4Addr::LOCALHOST.to_string() || iface == "lo",
+                ip4,
+                mac,
+                operstate,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    interfaces.sort_by(|a, b| a.iface.cmp(&b.iface));
+    interfaces
+}
+
+fn select_network_interface(
+    interfaces: &[NetworkInterfaceInfo],
+    preferred_iface: Option<&str>,
+) -> Option<NetworkInterfaceInfo> {
+    preferred_iface
+        .filter(|iface| !iface.trim().is_empty() && *iface != "false")
+        .and_then(|iface| {
+            interfaces
+                .iter()
+                .find(|interface| interface.iface == iface)
+                .cloned()
+        })
+        .or_else(|| {
+            interfaces
+                .iter()
+                .find(|interface| {
+                    interface.operstate == "up"
+                        && !interface.internal
+                        && !interface.ip4.is_empty()
+                        && !interface.mac.is_empty()
+                        && interface.mac != "00:00:00:00:00:00"
+                })
+                .cloned()
+        })
+}
+
+fn tcp_ping_ms(target: &str, port: u16) -> Result<f64, String> {
+    let addr = target
+        .parse::<Ipv4Addr>()
+        .map(|addr| SocketAddr::new(IpAddr::V4(addr), port))
+        .map_err(|err| format!("invalid IPv4 ping target '{target}': {err}"))?;
+    let start = Instant::now();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(1900))
+        .map_err(|err| format!("failed to connect to {addr}: {err}"))?;
+    Ok(start.elapsed().as_secs_f64() * 1000.0)
+}
+
+#[tauri::command]
+fn get_network_status(
+    state: State<'_, BackendState>,
+    iface: Option<String>,
+    ping_addr: Option<String>,
+) -> Result<NetworkStatus, String> {
+    let mut networks = state
+        .network_system
+        .lock()
+        .map_err(|_| "network metric state is poisoned".to_string())?;
+    networks.refresh(true);
+
+    let interfaces = network_interfaces_from_state(&networks);
+    let selected = select_network_interface(&interfaces, iface.as_deref());
+    let Some(selected) = selected else {
+        return Ok(NetworkStatus {
+            iface: None,
+            ip4: None,
+            display_ip4: None,
+            online: false,
+            ping_ms: None,
+            interfaces,
+        });
+    };
+
+    let ping_target = ping_addr
+        .filter(|addr| !addr.trim().is_empty())
+        .unwrap_or_else(|| "1.1.1.1".to_string());
+    let ping_ms = if selected.ip4 == Ipv4Addr::LOCALHOST.to_string() {
+        None
+    } else {
+        tcp_ping_ms(&ping_target, 80).ok()
+    };
+
+    Ok(NetworkStatus {
+        iface: Some(selected.iface),
+        ip4: Some(selected.ip4.clone()),
+        display_ip4: Some(selected.ip4),
+        online: ping_ms.is_some(),
+        ping_ms,
+        interfaces,
+    })
 }
 
 #[tauri::command]
@@ -2243,6 +2388,7 @@ pub fn run() {
             get_cpu_metrics,
             get_memory_metrics,
             get_process_metrics,
+            get_network_status,
             get_system_metrics,
             system_information_call,
             list_filesystem_directory,

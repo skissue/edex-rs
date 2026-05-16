@@ -135,6 +135,23 @@ export type ProcessMetrics = {
   mem: number;
 };
 
+export type NetworkInterfaceInfo = {
+  iface: string;
+  ip4: string;
+  mac: string;
+  operstate: string;
+  internal: boolean;
+};
+
+export type NetworkStatus = {
+  iface: string | null;
+  ip4: string | null;
+  displayIp4: string | null;
+  online: boolean;
+  pingMs: number | null;
+  interfaces: NetworkInterfaceInfo[];
+};
+
 export type SystemMetrics = {
   cpu: CpuMetrics;
   memory: MemoryMetrics;
@@ -325,6 +342,13 @@ export function getMemoryMetrics() {
 
 export function getProcessMetrics() {
   return invoke<ProcessMetrics[]>("get_process_metrics");
+}
+
+export function getNetworkStatus(iface?: string, pingAddr?: string) {
+  return invoke<NetworkStatus>("get_network_status", {
+    iface: iface || null,
+    pingAddr: pingAddr || null,
+  });
 }
 
 export function getMonitors() {

@@ -425,6 +425,16 @@ async function initLeftColumnModules() {
   }
 }
 
+async function initRightColumnModules() {
+  try {
+    const { Netstat } = await import("./netstat");
+    window.mods.netstat = new Netstat("mod_column_right");
+  } catch (error) {
+    console.error("Failed to initialize right column modules", error);
+    void logMessage("error", `Failed to initialize right column modules: ${String(error)}`);
+  }
+}
+
 window.themeChanger = (theme: string) => {
   setThemeOverride(theme)
     .catch((error) => {
@@ -633,6 +643,7 @@ window.addEventListener("DOMContentLoaded", () => {
       Promise.allSettled([keyboardReady, terminalReady]).then(() => {
         window.setTimeout(() => {
           void initLeftColumnModules();
+          void initRightColumnModules();
         }, 250);
       });
     })
