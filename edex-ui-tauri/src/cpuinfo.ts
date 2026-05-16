@@ -34,7 +34,7 @@ export class Cpuinfo {
     this.divide = divide;
     this.histories = Array.from({ length: cores }, () => []);
 
-    const cpuName = `${data.vendor}${data.brand}`.substr(0, 30);
+    const cpuName = this.trimCpuName(data.vendor, data.brand);
     this.container.innerHTML = `<div id="mod_cpuinfo_innercontainer">
             <h1>CPU USAGE<i>${window._escapeHtml(cpuName)}</i></h1>
             <div>
@@ -172,6 +172,18 @@ export class Cpuinfo {
 
   private formatGhz(value: number) {
     return (Math.round(value * 100) / 100).toString();
+  }
+
+  private trimCpuName(vendor: string, brand: string) {
+    let manufacturer = vendor.trim();
+    if (/authenticamd/i.test(manufacturer) || /^AMD\b/i.test(brand)) manufacturer = "AMD";
+    if (/genuineintel/i.test(manufacturer) || /^Intel\b/i.test(brand)) manufacturer = "Intel";
+
+    const normalizedBrand = brand.trim().replace(new RegExp(`^${manufacturer}\\s+`, "i"), "");
+    let cpuName = `${manufacturer}${normalizedBrand}`.substr(0, 30);
+    const lastSpace = cpuName.lastIndexOf(" ");
+    if (lastSpace > 0 && cpuName.length === 30) cpuName = cpuName.substr(0, lastSpace);
+    return cpuName;
   }
 
   destroy() {

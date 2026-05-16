@@ -90,6 +90,28 @@ div#mod_sysinfo h2 {
   line-height: 1;
 }
 
+div#mod_cpuinfo_innercontainer > h1:first-child,
+div#mod_ramwatcher_inner > h1:first-child {
+  font-size: 1.3vh;
+  padding-left: 0.5vh;
+  width: calc(100% - 0.5vh);
+}
+
+div#mod_cpuinfo_innercontainer > h1:first-child {
+  position: relative;
+  margin-bottom: -0.4vh;
+}
+
+div#mod_cpuinfo_innercontainer > h1:first-child > i {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .skeleton-module {
   min-height: 11vh;
   border-top: 0.092vh solid rgba(var(--color_r), var(--color_g), var(--color_b), 0.3);
