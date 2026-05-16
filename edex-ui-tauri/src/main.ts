@@ -13,13 +13,10 @@ import {
   type ShortcutConfig,
   type ThemeConfig,
 } from "./backend";
-import { Cpuinfo } from "./cpuinfo";
 import type { FilesystemDisplay } from "./filesystem";
 import { FuzzyFinder } from "./fuzzyFinder";
-import { HardwareInspector } from "./hardwareInspector";
 import { Keyboard } from "./keyboard";
 import { openSettings, openShortcutsHelp, writeSettingsFile } from "./settings";
-import { Sysinfo } from "./sysinfo";
 import type { TauriTerminal } from "./terminal";
 
 declare global {
@@ -407,11 +404,19 @@ async function initKeyboard(layoutName = settingAsString("keyboard", "en-US")) {
   });
 }
 
-function initLeftColumnModules() {
+async function initLeftColumnModules() {
   try {
+    const [{ Sysinfo }, { HardwareInspector }, { Cpuinfo }, { RAMwatcher }] = await Promise.all([
+      import("./sysinfo"),
+      import("./hardwareInspector"),
+      import("./cpuinfo"),
+      import("./ramwatcher"),
+    ]);
+
     window.mods.sysinfo = new Sysinfo("mod_column_left");
     window.mods.hardwareInspector = new HardwareInspector("mod_column_left");
     window.mods.cpuinfo = new Cpuinfo("mod_column_left");
+    window.mods.ramwatcher = new RAMwatcher("mod_column_left");
   } catch (error) {
     console.error("Failed to initialize left column modules", error);
     void logMessage("error", `Failed to initialize left column modules: ${String(error)}`);
@@ -614,10 +619,20 @@ window.addEventListener("DOMContentLoaded", () => {
   loadBootstrapConfig()
     .then(async () => {
       window.registerKeyboardShortcuts();
-      await initKeyboard();
-      await initTerminalBackend();
-      await initFilesystemDisplay();
-      window.setTimeout(initLeftColumnModules, 250);
+      const keyboardReady = initKeyboard().catch((error) => {
+        logStartupError("Keyboard failed to initialize", error);
+      });
+      const terminalReady = initTerminalBackend()
+        .then(initFilesystemDisplay)
+        .catch((error) => {
+          logStartupError("Terminal failed to initialize", error);
+        });
+
+      Promise.allSettled([keyboardReady, terminalReady]).then(() => {
+        window.setTimeout(() => {
+          void initLeftColumnModules();
+        }, 250);
+      });
     })
     .catch((error) => {
       logStartupError("Failed to load eDEX config", error);

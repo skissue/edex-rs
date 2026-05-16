@@ -1703,6 +1703,22 @@ fn get_cpu_metrics(state: State<'_, BackendState>) -> CpuMetrics {
 }
 
 #[tauri::command]
+fn get_memory_metrics() -> MemoryMetrics {
+    let mut sys = System::new();
+    sys.refresh_memory();
+
+    MemoryMetrics {
+        total: sys.total_memory(),
+        free: sys.free_memory(),
+        used: sys.used_memory(),
+        active: sys.used_memory(),
+        available: sys.available_memory(),
+        swap_total: sys.total_swap(),
+        swap_used: sys.used_swap(),
+    }
+}
+
+#[tauri::command]
 fn get_system_metrics() -> SystemMetrics {
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -2184,6 +2200,7 @@ pub fn run() {
             get_sysinfo_snapshot,
             get_hardware_identity,
             get_cpu_metrics,
+            get_memory_metrics,
             get_system_metrics,
             system_information_call,
             list_filesystem_directory,

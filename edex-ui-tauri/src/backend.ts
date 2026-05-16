@@ -319,6 +319,10 @@ export function getCpuMetrics() {
   return invoke<CpuMetrics>("get_cpu_metrics");
 }
 
+export function getMemoryMetrics() {
+  return invoke<MemoryMetrics>("get_memory_metrics");
+}
+
 export function getMonitors() {
   return invoke<MonitorInfo[]>("get_monitors");
 }
