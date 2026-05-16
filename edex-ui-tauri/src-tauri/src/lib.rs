@@ -15,7 +15,7 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Disks, System};
+use sysinfo::{Components, Disks, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
 const THEMES: &[(&str, &str)] = &[
@@ -381,6 +381,48 @@ struct HardwareIdentity {
     manufacturer: String,
     model: String,
     chassis: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CpuMetrics {
+    vendor: String,
+    brand: String,
+    cores: usize,
+    speed_ghz: f64,
+    speed_max_ghz: f64,
+    temperature_celsius: Option<f32>,
+    loads: Vec<f32>,
+    tasks: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryMetrics {
+    total: u64,
+    free: u64,
+    used: u64,
+    active: u64,
+    available: u64,
+    swap_total: u64,
+    swap_used: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessMetrics {
+    pid: u32,
+    name: String,
+    cpu: f32,
+    mem: f32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemMetrics {
+    cpu: CpuMetrics,
+    memory: MemoryMetrics,
+    processes: Vec<ProcessMetrics>,
 }
 
 #[derive(Default)]
@@ -1486,6 +1528,114 @@ fn get_hardware_identity() -> HardwareIdentity {
     read_hardware_identity()
 }
 
+#[cfg(target_os = "linux")]
+fn read_cpu_max_ghz() -> Option<f64> {
+    let entries = fs::read_dir("/sys/devices/system/cpu").ok()?;
+    let max_khz = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("cpu") || !name[3..].chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+            fs::read_to_string(entry.path().join("cpufreq/cpuinfo_max_freq"))
+                .ok()?
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .max()?;
+
+    Some(max_khz as f64 / 1_000_000.0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_cpu_max_ghz() -> Option<f64> {
+    None
+}
+
+fn current_cpu_temperature() -> Option<f32> {
+    let components = Components::new_with_refreshed_list();
+    components.iter().filter_map(|component| component.temperature()).fold(
+        None,
+        |max_temperature, temperature| {
+            Some(
+                max_temperature
+                    .map(|current_max: f32| current_max.max(temperature))
+                    .unwrap_or(temperature),
+            )
+        },
+    )
+}
+
+#[tauri::command]
+fn get_system_metrics() -> SystemMetrics {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
+    sys.refresh_cpu_usage();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let cpus = sys.cpus();
+    let cores = cpus.len();
+    let vendor = cpus
+        .first()
+        .map(|cpu| cpu.vendor_id().to_string())
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let brand = cpus
+        .first()
+        .map(|cpu| cpu.brand().to_string())
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let speed_mhz = if cpus.is_empty() {
+        0.0
+    } else {
+        cpus.iter().map(|cpu| cpu.frequency() as f64).sum::<f64>() / cpus.len() as f64
+    };
+    let speed_ghz = speed_mhz / 1000.0;
+    let speed_max_ghz = read_cpu_max_ghz().unwrap_or(speed_ghz);
+    let loads = cpus.iter().map(|cpu| cpu.cpu_usage()).collect::<Vec<_>>();
+    let total_memory = sys.total_memory();
+
+    let processes = sys
+        .processes()
+        .iter()
+        .map(|(pid, process)| ProcessMetrics {
+            pid: pid.as_u32(),
+            name: process.name().to_string_lossy().into_owned(),
+            cpu: process.cpu_usage(),
+            mem: if total_memory > 0 {
+                (process.memory() as f32 / total_memory as f32) * 100.0
+            } else {
+                0.0
+            },
+        })
+        .collect::<Vec<_>>();
+
+    SystemMetrics {
+        cpu: CpuMetrics {
+            vendor,
+            brand,
+            cores,
+            speed_ghz,
+            speed_max_ghz,
+            temperature_celsius: current_cpu_temperature(),
+            loads,
+            tasks: processes.len(),
+        },
+        memory: MemoryMetrics {
+            total: total_memory,
+            free: sys.free_memory(),
+            used: sys.used_memory(),
+            active: sys.used_memory(),
+            available: sys.available_memory(),
+            swap_total: sys.total_swap(),
+            swap_used: sys.used_swap(),
+        },
+        processes,
+    }
+}
+
 #[tauri::command]
 fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, String> {
     Err(format!(
@@ -1901,6 +2051,7 @@ pub fn run() {
             get_platform_info,
             get_sysinfo_snapshot,
             get_hardware_identity,
+            get_system_metrics,
             system_information_call,
             list_filesystem_directory,
             list_filesystem_devices,
