@@ -406,17 +406,19 @@ async function initKeyboard(layoutName = settingAsString("keyboard", "en-US")) {
 
 async function initLeftColumnModules() {
   try {
-    const [{ Sysinfo }, { HardwareInspector }, { Cpuinfo }, { RAMwatcher }] = await Promise.all([
+    const [{ Sysinfo }, { HardwareInspector }, { Cpuinfo }, { RAMwatcher }, { Toplist }] = await Promise.all([
       import("./sysinfo"),
       import("./hardwareInspector"),
       import("./cpuinfo"),
       import("./ramwatcher"),
+      import("./toplist"),
     ]);
 
     window.mods.sysinfo = new Sysinfo("mod_column_left");
     window.mods.hardwareInspector = new HardwareInspector("mod_column_left");
     window.mods.cpuinfo = new Cpuinfo("mod_column_left");
     window.mods.ramwatcher = new RAMwatcher("mod_column_left");
+    window.mods.toplist = new Toplist("mod_column_left");
   } catch (error) {
     console.error("Failed to initialize left column modules", error);
     void logMessage("error", `Failed to initialize left column modules: ${String(error)}`);

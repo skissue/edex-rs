@@ -431,11 +431,22 @@ struct SystemMetrics {
     processes: Vec<ProcessMetrics>,
 }
 
-#[derive(Default)]
 struct BackendState {
     theme_override: Mutex<Option<String>>,
     keyboard_override: Mutex<Option<String>>,
     cpu_samples: Mutex<Option<Vec<CpuStatSample>>>,
+    process_system: Mutex<System>,
+}
+
+impl Default for BackendState {
+    fn default() -> Self {
+        Self {
+            theme_override: Mutex::new(None),
+            keyboard_override: Mutex::new(None),
+            cpu_samples: Mutex::new(None),
+            process_system: Mutex::new(System::new_all()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1785,6 +1796,36 @@ fn get_system_metrics() -> SystemMetrics {
 }
 
 #[tauri::command]
+fn get_process_metrics(state: State<'_, BackendState>) -> Result<Vec<ProcessMetrics>, String> {
+    let mut sys = state
+        .process_system
+        .lock()
+        .map_err(|_| "process metric state is poisoned".to_string())?;
+
+    sys.refresh_memory();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let total_memory = sys.total_memory();
+    let mut processes = sys
+        .processes()
+        .iter()
+        .map(|(pid, process)| ProcessMetrics {
+            pid: pid.as_u32(),
+            name: process.name().to_string_lossy().into_owned(),
+            cpu: process.cpu_usage(),
+            mem: if total_memory > 0 {
+                (process.memory() as f32 / total_memory as f32) * 100.0
+            } else {
+                0.0
+            },
+        })
+        .collect::<Vec<_>>();
+
+    processes.sort_by(|a, b| a.pid.cmp(&b.pid));
+    Ok(processes)
+}
+
+#[tauri::command]
 fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, String> {
     Err(format!(
         "system information method '{method}' is not implemented in the Rust backend yet ({} args)",
@@ -2201,6 +2242,7 @@ pub fn run() {
             get_hardware_identity,
             get_cpu_metrics,
             get_memory_metrics,
+            get_process_metrics,
             get_system_metrics,
             system_information_call,
             list_filesystem_directory,
