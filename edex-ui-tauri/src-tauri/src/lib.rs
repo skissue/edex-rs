@@ -1,6 +1,8 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::HashMap,
     env, fs,
@@ -209,6 +211,7 @@ struct BootstrapConfig {
     flags: BootFlags,
     metadata: AppMetadata,
     terminal_launch: TerminalLaunchConfig,
+    terminal_launch_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -616,10 +619,29 @@ fn named_json_from_dir(dir: &Path, name: &str) -> Result<Value, String> {
 }
 
 fn path_is_executable(path: &Path) -> bool {
-    path.is_file()
+    if !path.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn resolve_shell(shell: &str) -> Result<String, String> {
+    let shell = shell.trim();
+    if shell.is_empty() {
+        return Err("configured shell is empty".to_string());
+    }
+
     let shell_path = Path::new(shell);
     let has_separator = shell.contains('/') || shell.contains('\\');
 
@@ -646,7 +668,9 @@ fn resolve_shell(shell: &str) -> Result<String, String> {
         }
     }
 
-    Err(format!("could not resolve shell on PATH: {shell}"))
+    Err(format!(
+        "could not resolve shell on PATH: {shell}; set settings.shell to an absolute executable path or ensure PATH contains it"
+    ))
 }
 
 fn env_overrides_from_settings(settings: &Value) -> HashMap<String, String> {
@@ -713,6 +737,49 @@ fn prepare_terminal_launch(
         env: env_vars,
         port,
     })
+}
+
+fn bootstrap_terminal_launch(
+    settings: &Value,
+    metadata: &AppMetadata,
+    settings_dir: &Path,
+) -> (TerminalLaunchConfig, Option<String>) {
+    match prepare_terminal_launch(settings, metadata, settings_dir) {
+        Ok(launch) => (launch, None),
+        Err(err) => {
+            eprintln!("[boot] terminal launch config is invalid: {err}");
+
+            let shell = settings
+                .get("shell")
+                .and_then(Value::as_str)
+                .unwrap_or(if cfg!(target_os = "windows") {
+                    "powershell.exe"
+                } else {
+                    "bash"
+                })
+                .to_string();
+            let cwd = path_to_string(&default_terminal_cwd(settings_dir));
+
+            (
+                TerminalLaunchConfig {
+                    shell,
+                    shell_args: settings
+                        .get("shellArgs")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    cwd,
+                    env: env::vars().collect(),
+                    port: settings
+                        .get("port")
+                        .and_then(Value::as_u64)
+                        .and_then(|port| port.try_into().ok())
+                        .unwrap_or(3000),
+                },
+                Some(err),
+            )
+        }
+    }
 }
 
 fn default_terminal_cwd(settings_dir: &Path) -> PathBuf {
@@ -956,7 +1023,8 @@ fn ensure_default_config(app: &AppHandle) -> Result<BootstrapConfig, String> {
 
     let settings = read_json(&settings_file)?;
     let version_history = update_version_history(&version_history_file, &metadata.version)?;
-    let terminal_launch = prepare_terminal_launch(&settings, &metadata, &settings_dir)?;
+    let (terminal_launch, terminal_launch_error) =
+        bootstrap_terminal_launch(&settings, &metadata, &settings_dir);
 
     Ok(BootstrapConfig {
         paths,
@@ -967,6 +1035,7 @@ fn ensure_default_config(app: &AppHandle) -> Result<BootstrapConfig, String> {
         flags,
         metadata,
         terminal_launch,
+        terminal_launch_error,
     })
 }
 
@@ -1333,7 +1402,11 @@ fn spawn_terminal(
 ) -> Result<TerminalSessionInfo, String> {
     let metadata = app_metadata(&app);
     let settings_dir = config_dir(&app)?;
-    let launch = prepare_terminal_launch(&request.settings, &metadata, &settings_dir)?;
+    let launch =
+        prepare_terminal_launch(&request.settings, &metadata, &settings_dir).map_err(|err| {
+            eprintln!("[terminal] invalid launch config: {err}");
+            err
+        })?;
     let cols = request.cols.unwrap_or(80).max(1);
     let rows = request.rows.unwrap_or(24).max(1);
     let pty_system = native_pty_system();
@@ -1357,10 +1430,14 @@ fn spawn_terminal(
         command.arg(arg);
     }
 
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|err| format!("failed to spawn terminal shell: {err}"))?;
+    let mut child = pair.slave.spawn_command(command).map_err(|err| {
+        let detail = format!(
+            "failed to spawn terminal shell '{}' in '{}': {err}",
+            launch.shell, launch.cwd
+        );
+        eprintln!("[terminal] {detail}");
+        detail
+    })?;
     let pid = child.process_id();
     let killer = child.clone_killer();
     drop(pair.slave);

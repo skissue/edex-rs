@@ -152,10 +152,38 @@ function initGraphicalErrorHandling() {
   window.onerror = (message, source, line, column, error) => {
     const detail = `${String(error || "Error")}: ${String(message)}`;
     console.error(detail, source, line, column);
+    showStartupError("Renderer error", detail);
     logMessage("error", detail).catch((logError) => {
       console.error("Failed to write renderer error to backend log", logError);
     });
   };
+
+  window.onunhandledrejection = (event) => {
+    const detail = event.reason instanceof Error ? event.reason.stack || event.reason.message : String(event.reason);
+    console.error("Unhandled renderer rejection", event.reason);
+    showStartupError("Unhandled renderer rejection", detail);
+    logMessage("error", `Unhandled renderer rejection: ${detail}`).catch((logError) => {
+      console.error("Failed to write renderer rejection to backend log", logError);
+    });
+  };
+}
+
+function showStartupError(title: string, error: unknown) {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  const terminal = document.getElementById("terminal0");
+  if (terminal) {
+    terminal.textContent = `${title}\n\n${message}`;
+  }
+  setShellTabText(0, "ERROR");
+}
+
+function logStartupError(title: string, error: unknown) {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  console.error(title, error);
+  showStartupError(title, message);
+  void logMessage("error", `${title}: ${message}`).catch((logError) => {
+    console.error("Failed to write startup error to backend log", logError);
+  });
 }
 
 function initSystemInformationProxy() {
@@ -309,9 +337,15 @@ async function loadBootstrapConfig() {
   if (keyboardOverride !== null) window.settings.keyboard = keyboardOverride;
 
   window._loadTheme(await readTheme(settingAsString("theme", "tron")));
-  initGraphicalErrorHandling();
   initSystemInformationProxy();
   await waitForFonts();
+
+  if (boot.terminalLaunchError) {
+    console.warn("Terminal launch config is invalid", boot.terminalLaunchError);
+    void logMessage("warn", `Terminal launch config is invalid: ${boot.terminalLaunchError}`).catch((error) => {
+      console.error("Failed to log terminal launch config warning", error);
+    });
+  }
 
   console.info("Loaded eDEX config", {
     settingsDir: boot.paths.settingsDir,
@@ -542,6 +576,8 @@ window.addEventListener("resize", () => {
 });
 
 window.addEventListener("DOMContentLoaded", () => {
+  initGraphicalErrorHandling();
+
   for (let index = 0; index < MAX_TERMINALS; index += 1) {
     document.getElementById(`shell_tab${index}`)?.addEventListener("click", () => window.focusShellTab(index));
   }
@@ -551,15 +587,11 @@ window.addEventListener("DOMContentLoaded", () => {
       window.registerKeyboardShortcuts();
       await initKeyboard();
       initTerminalBackend().then(initFilesystemDisplay).catch((error) => {
-        const terminal = document.getElementById("terminal0");
-        if (terminal) {
-          terminal.textContent = `terminal failed to initialize\n\n${String(error)}`;
-        }
-        console.error("Failed to initialize terminal", error);
+        logStartupError("Terminal failed to initialize", error);
       });
     })
     .catch((error) => {
-      console.error("Failed to load eDEX config", error);
+      logStartupError("Failed to load eDEX config", error);
     });
   updateClock();
   window.setInterval(updateClock, 1000);

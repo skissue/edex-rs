@@ -105,6 +105,7 @@ export type BootstrapConfig = {
   flags: BootFlags;
   metadata: AppMetadata;
   terminalLaunch: TerminalLaunchConfig;
+  terminalLaunchError: string | null;
 };
 
 export type ThemeConfig = {
@@ -270,7 +271,7 @@ export function openPathExternal(path: string) {
 }
 
 export function logMessage(level: string, message: string) {
-  return invoke<void>("log_message", { level, message });
+  return invoke<void>("log_message", { level, content: message });
 }
 
 export function openDevtools() {
