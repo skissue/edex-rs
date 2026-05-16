@@ -107,6 +107,40 @@ export type HardwareIdentity = {
   chassis: string;
 };
 
+export type CpuMetrics = {
+  vendor: string;
+  brand: string;
+  cores: number;
+  speedGhz: number;
+  speedMaxGhz: number;
+  temperatureCelsius: number | null;
+  loads: number[];
+  tasks: number;
+};
+
+export type MemoryMetrics = {
+  total: number;
+  free: number;
+  used: number;
+  active: number;
+  available: number;
+  swapTotal: number;
+  swapUsed: number;
+};
+
+export type ProcessMetrics = {
+  pid: number;
+  name: string;
+  cpu: number;
+  mem: number;
+};
+
+export type SystemMetrics = {
+  cpu: CpuMetrics;
+  memory: MemoryMetrics;
+  processes: ProcessMetrics[];
+};
+
 export type ShortcutConfig = {
   trigger: string;
   type: "app" | "shell" | string;
@@ -275,6 +309,14 @@ export function getSysinfoSnapshot() {
 
 export function getHardwareIdentity() {
   return invoke<HardwareIdentity>("get_hardware_identity");
+}
+
+export function getSystemMetrics() {
+  return invoke<SystemMetrics>("get_system_metrics");
+}
+
+export function getCpuMetrics() {
+  return invoke<CpuMetrics>("get_cpu_metrics");
 }
 
 export function getMonitors() {

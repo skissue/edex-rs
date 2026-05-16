@@ -15,7 +15,7 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{Components, Disks, System, MINIMUM_CPU_UPDATE_INTERVAL};
+use sysinfo::{Components, Disks, System};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
 const THEMES: &[(&str, &str)] = &[
@@ -396,6 +396,12 @@ struct CpuMetrics {
     tasks: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CpuStatSample {
+    idle: u64,
+    total: u64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MemoryMetrics {
@@ -429,6 +435,7 @@ struct SystemMetrics {
 struct BackendState {
     theme_override: Mutex<Option<String>>,
     keyboard_override: Mutex<Option<String>>,
+    cpu_samples: Mutex<Option<Vec<CpuStatSample>>>,
 }
 
 #[derive(Default)]
@@ -1569,11 +1576,136 @@ fn current_cpu_temperature() -> Option<f32> {
     )
 }
 
+#[cfg(target_os = "linux")]
+fn read_cpu_stat_samples() -> Vec<CpuStatSample> {
+    fs::read_to_string("/proc/stat")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let label = parts.next()?;
+            if !label.starts_with("cpu") || !label[3..].chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+
+            let values = parts
+                .filter_map(|part| part.parse::<u64>().ok())
+                .collect::<Vec<_>>();
+            if values.len() < 4 {
+                return None;
+            }
+
+            let idle = values.get(3).copied().unwrap_or(0) + values.get(4).copied().unwrap_or(0);
+            let total = values.iter().sum();
+            Some(CpuStatSample { idle, total })
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_cpu_stat_samples() -> Vec<CpuStatSample> {
+    Vec::new()
+}
+
+#[cfg(target_os = "linux")]
+fn read_cpuinfo_field(name: &str) -> Option<String> {
+    fs::read_to_string("/proc/cpuinfo")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            if key.trim() == name {
+                Some(value.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_cpuinfo_field(_name: &str) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn count_proc_tasks() -> usize {
+    fs::read_dir("/proc")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().chars().all(|ch| ch.is_ascii_digit()))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn count_proc_tasks() -> usize {
+    0
+}
+
+fn cpu_loads_from_samples(
+    state: &State<'_, BackendState>,
+    current: &[CpuStatSample],
+) -> Vec<f32> {
+    let mut previous = match state.cpu_samples.lock() {
+        Ok(previous) => previous,
+        Err(_) => return vec![0.0; current.len()],
+    };
+
+    let loads = previous
+        .as_ref()
+        .filter(|previous| previous.len() == current.len())
+        .map(|previous| {
+            current
+                .iter()
+                .zip(previous.iter())
+                .map(|(current, previous)| {
+                    let total_delta = current.total.saturating_sub(previous.total);
+                    let idle_delta = current.idle.saturating_sub(previous.idle);
+                    if total_delta == 0 {
+                        0.0
+                    } else {
+                        ((total_delta.saturating_sub(idle_delta)) as f32 / total_delta as f32) * 100.0
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![0.0; current.len()]);
+
+    *previous = Some(current.to_vec());
+    loads
+}
+
+#[tauri::command]
+fn get_cpu_metrics(state: State<'_, BackendState>) -> CpuMetrics {
+    let current_samples = read_cpu_stat_samples();
+    let loads = cpu_loads_from_samples(&state, &current_samples);
+    let vendor = read_cpuinfo_field("vendor_id").unwrap_or_else(|| "UNKNOWN".to_string());
+    let brand = read_cpuinfo_field("model name").unwrap_or_else(|| "UNKNOWN".to_string());
+    let speed_ghz = read_cpuinfo_field("cpu MHz")
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|mhz| mhz / 1000.0)
+        .unwrap_or(0.0);
+    let speed_max_ghz = read_cpu_max_ghz().unwrap_or(speed_ghz);
+
+    CpuMetrics {
+        vendor,
+        brand,
+        cores: current_samples.len().max(loads.len()),
+        speed_ghz,
+        speed_max_ghz,
+        temperature_celsius: current_cpu_temperature(),
+        loads,
+        tasks: count_proc_tasks(),
+    }
+}
+
 #[tauri::command]
 fn get_system_metrics() -> SystemMetrics {
     let mut sys = System::new_all();
     sys.refresh_all();
-    thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
     sys.refresh_cpu_usage();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
@@ -2051,6 +2183,7 @@ pub fn run() {
             get_platform_info,
             get_sysinfo_snapshot,
             get_hardware_identity,
+            get_cpu_metrics,
             get_system_metrics,
             system_information_call,
             list_filesystem_directory,

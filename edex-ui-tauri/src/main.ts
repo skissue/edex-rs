@@ -13,6 +13,7 @@ import {
   type ShortcutConfig,
   type ThemeConfig,
 } from "./backend";
+import { Cpuinfo } from "./cpuinfo";
 import type { FilesystemDisplay } from "./filesystem";
 import { FuzzyFinder } from "./fuzzyFinder";
 import { HardwareInspector } from "./hardwareInspector";
@@ -410,6 +411,7 @@ function initLeftColumnModules() {
   try {
     window.mods.sysinfo = new Sysinfo("mod_column_left");
     window.mods.hardwareInspector = new HardwareInspector("mod_column_left");
+    window.mods.cpuinfo = new Cpuinfo("mod_column_left");
   } catch (error) {
     console.error("Failed to initialize left column modules", error);
     void logMessage("error", `Failed to initialize left column modules: ${String(error)}`);
@@ -613,10 +615,9 @@ window.addEventListener("DOMContentLoaded", () => {
     .then(async () => {
       window.registerKeyboardShortcuts();
       await initKeyboard();
-      initTerminalBackend().then(initFilesystemDisplay).catch((error) => {
-        logStartupError("Terminal failed to initialize", error);
-      });
-      window.setTimeout(initLeftColumnModules, 0);
+      await initTerminalBackend();
+      await initFilesystemDisplay();
+      window.setTimeout(initLeftColumnModules, 250);
     })
     .catch((error) => {
       logStartupError("Failed to load eDEX config", error);
