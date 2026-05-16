@@ -15,7 +15,7 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::Disks;
+use sysinfo::{Disks, System};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size, State, WindowEvent};
 
 const THEMES: &[(&str, &str)] = &[
@@ -356,6 +356,23 @@ struct FilesystemUsage {
     available_space: u64,
     used_space: u64,
     used_percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatteryInfo {
+    has_battery: bool,
+    percent: Option<u8>,
+    is_charging: bool,
+    ac_connected: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SysinfoSnapshot {
+    os: String,
+    uptime: u64,
+    battery: BatteryInfo,
 }
 
 #[derive(Default)]
@@ -1304,6 +1321,77 @@ fn get_platform_info() -> PlatformInfo {
     }
 }
 
+fn legacy_os_label() -> String {
+    match env::consts::OS {
+        "macos" => "macOS".to_string(),
+        "windows" => "win".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_power_supply_value(path: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(path.join(name))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn read_battery_info() -> BatteryInfo {
+    let mut has_battery = false;
+    let mut percent = None;
+    let mut is_charging = false;
+    let mut ac_connected = false;
+
+    if let Ok(entries) = fs::read_dir("/sys/class/power_supply") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let supply_type = read_power_supply_value(&path, "type").unwrap_or_default();
+            if supply_type.eq_ignore_ascii_case("battery") {
+                has_battery = true;
+                if percent.is_none() {
+                    percent = read_power_supply_value(&path, "capacity")
+                        .and_then(|value| value.parse::<u8>().ok());
+                }
+                if let Some(status) = read_power_supply_value(&path, "status") {
+                    let normalized = status.to_lowercase();
+                    is_charging =
+                        normalized == "charging" || normalized == "full" || normalized == "not charging";
+                }
+            } else if read_power_supply_value(&path, "online").as_deref() == Some("1") {
+                ac_connected = true;
+            }
+        }
+    }
+
+    BatteryInfo {
+        has_battery,
+        percent,
+        is_charging,
+        ac_connected,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_battery_info() -> BatteryInfo {
+    BatteryInfo {
+        has_battery: false,
+        percent: None,
+        is_charging: false,
+        ac_connected: false,
+    }
+}
+
+#[tauri::command]
+fn get_sysinfo_snapshot() -> SysinfoSnapshot {
+    SysinfoSnapshot {
+        os: legacy_os_label(),
+        uptime: System::uptime(),
+        battery: read_battery_info(),
+    }
+}
+
 #[tauri::command]
 fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, String> {
     Err(format!(
@@ -1717,6 +1805,7 @@ pub fn run() {
             quit_app,
             restart_app,
             get_platform_info,
+            get_sysinfo_snapshot,
             system_information_call,
             list_filesystem_directory,
             list_filesystem_devices,
