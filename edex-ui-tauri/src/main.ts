@@ -16,6 +16,7 @@ import {
 import type { FilesystemDisplay } from "./filesystem";
 import { FuzzyFinder } from "./fuzzyFinder";
 import { Keyboard } from "./keyboard";
+import { openSettings, openShortcutsHelp, writeSettingsFile } from "./settings";
 import type { TauriTerminal } from "./terminal";
 
 declare global {
@@ -32,6 +33,9 @@ declare global {
     _loadTheme: (theme: ThemeConfig) => void;
     themeChanger: (theme: string) => void;
     remakeKeyboard: (layout: string) => void | Promise<void>;
+    openSettings: () => void | Promise<void>;
+    openShortcutsHelp: () => void;
+    writeSettingsFile: () => void | Promise<void>;
     fsDisp?: FilesystemDisplay;
     activeFuzzyFinder?: FuzzyFinder;
     useAppShortcut: (action: string) => boolean;
@@ -367,6 +371,10 @@ window.remakeKeyboard = async (layout: string) => {
   await setKeyboardOverride(layout);
 };
 
+window.openSettings = openSettings;
+window.openShortcutsHelp = openShortcutsHelp;
+window.writeSettingsFile = writeSettingsFile;
+
 window.focusShellTab = (number: number) => {
   void createTerminal(number).catch((error) => {
     setShellTabText(number, "ERROR");
@@ -482,11 +490,11 @@ window.useAppShortcut = (action: string) => {
       window.focusShellTab(4);
       return true;
     case "SETTINGS":
-      console.warn("Settings editor is not ported yet");
-      return false;
+      void window.openSettings();
+      return true;
     case "SHORTCUTS":
-      console.warn("Shortcuts editor is not ported yet");
-      return false;
+      window.openShortcutsHelp();
+      return true;
     case "FUZZY_SEARCH":
       window.activeFuzzyFinder = new FuzzyFinder();
       return true;

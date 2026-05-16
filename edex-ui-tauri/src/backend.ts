@@ -157,11 +157,18 @@ export type PlatformInfo = {
 };
 
 export type MonitorInfo = {
+  index: number;
   name: string | null;
-  position: { x: number; y: number };
-  size: { width: number; height: number };
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  workX: number;
+  workY: number;
+  workWidth: number;
+  workHeight: number;
   scaleFactor: number;
-  isPrimary: boolean;
+  primary: boolean;
 };
 
 export function getBootstrapConfig() {
@@ -201,7 +208,7 @@ export function setKeyboardOverride(layout: string | null) {
 }
 
 export function writeSettings(settings: JsonObject) {
-  return invoke<void>("write_settings", { settings });
+  return invoke<BootstrapConfig>("write_settings", { settings });
 }
 
 export function writeLastWindowState(state: JsonObject) {
