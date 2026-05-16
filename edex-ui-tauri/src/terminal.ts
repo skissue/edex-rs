@@ -131,6 +131,11 @@ export class TauriTerminal {
 
     this.term.loadAddon(this.fitAddon);
     this.term.open(this.parent);
+    this.term.attachCustomKeyEventHandler((event) => {
+      if (event.type === "keydown") window.keyboard?.keydownHandler(event);
+      if (event.type === "keyup") window.keyboard?.keyupHandler(event);
+      return true;
+    });
     this.term.onData((data) => this.write(data));
     this.parent.addEventListener("wheel", (event) => {
       this.term.scrollLines(Math.round(event.deltaY / 10));

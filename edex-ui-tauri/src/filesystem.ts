@@ -8,8 +8,11 @@ import {
   type FilesystemUsage,
   type JsonObject,
 } from "./backend";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import iconsJson from "./assets/icons/file-icons.json";
 import matchIcon from "./assets/misc/file-icons-match.js";
+import { MediaPlayer } from "./mediaPlayer";
+import { Modal } from "./modal";
 import type { TauriTerminal } from "./terminal";
 
 type Icon = {
@@ -57,6 +60,10 @@ function formatBytes(bytes: number, decimals = 2) {
 
 function settingsBool(settings: JsonObject, key: string) {
   return settings[key] === true;
+}
+
+function escapeAttribute(value: string) {
+  return window._escapeHtml(value).replace(/`/g, "&#096;");
 }
 
 function iconFor(block: FilesystemBlock) {
@@ -328,6 +335,79 @@ export class FilesystemDisplay {
     if (block?.path) activeTerminal()?.write(quoteShellPath(block.path));
   }
 
+  openMedia(index: number) {
+    const block = this.cwd[index];
+    const type = displayType(block);
+    if (!block?.path || (type !== "image" && type !== "audio" && type !== "video")) return;
+
+    const source = escapeAttribute(convertFileSrc(block.path));
+    let html = "";
+
+    switch (type) {
+      case "image":
+        html = `<img class="fsDisp_mediaDisp" src="${source}" ondragstart="return false;">`;
+        break;
+      case "audio":
+        html = `<div>
+          <div class="media_container" data-fullscreen="false">
+            <audio class="media fsDisp_mediaDisp" preload="auto">
+              <source src="${source}">
+              Unsupported audio format!
+            </audio>
+            <div class="media_controls" data-state="hidden">
+              <div class="playpause media_button" data-state="play">${this.iconSvg("play")}</div>
+              <div class="progress_container">
+                <div class="progress"><span class="progress_bar"></span></div>
+              </div>
+              <div class="media_time">00:00:00</div>
+              <div class="volume_icon">${this.iconSvg("volume")}</div>
+              <div class="volume">
+                <div class="volume_bkg"></div>
+                <div class="volume_bar"></div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+        break;
+      case "video":
+        html = `<div>
+          <div class="media_container" data-fullscreen="false">
+            <video class="media fsDisp_mediaDisp" preload="auto">
+              <source src="${source}">
+              Unsupported video format!
+            </video>
+            <div class="media_controls" data-state="hidden">
+              <div class="playpause media_button" data-state="play">${this.iconSvg("play")}</div>
+              <div class="progress_container">
+                <div class="progress"><span class="progress_bar"></span></div>
+              </div>
+              <div class="media_time">00:00:00</div>
+              <div class="volume_icon">${this.iconSvg("volume")}</div>
+              <div class="volume">
+                <div class="volume_bkg"></div>
+                <div class="volume_bar"></div>
+              </div>
+              <div class="fs media_button" data-state="go-fullscreen">${this.iconSvg("fullscreen")}</div>
+            </div>
+          </div>
+        </div>`;
+        break;
+    }
+
+    const modal = new Modal({
+      type: "custom",
+      title: block.name,
+      html,
+    });
+
+    if (type === "audio" || type === "video") {
+      new MediaPlayer({
+        modalId: modal.id,
+        type,
+      });
+    }
+  }
+
   private entryToBlock(entry: FilesystemEntry): FilesystemBlock {
     return {
       name: entry.name,
@@ -394,9 +474,16 @@ export class FilesystemDisplay {
     } else if (block.entryType === "edex-kblayout") {
       void window.remakeKeyboard(block.name.replace(/\.json$/i, ""));
     } else if (block.entryType === "file") {
-      this.openFile(index);
+      const type = displayType(block);
+      if (type === "image" || type === "audio" || type === "video") this.openMedia(index);
+      else this.openFile(index);
     } else {
       activeTerminal()?.write(quoteShellPath(block.path));
     }
+  }
+
+  private iconSvg(name: string) {
+    const icon = icons[name];
+    return `<svg viewBox="0 0 ${icon?.width || 24} ${icon?.height || 24}" fill="${this.iconcolor}">${icon?.svg || ""}</svg>`;
   }
 }

@@ -30,6 +30,12 @@ mkShell {
     libayatana-appindicator
     librsvg
     xdotool
+    gst_all_1.gstreamer
+    gst_all_1.gst-plugins-base
+    gst_all_1.gst-plugins-good
+    gst_all_1.gst-plugins-bad
+    gst_all_1.gst-plugins-ugly
+    gst_all_1.gst-libav
 
     # Native module deps
     libsecret
@@ -79,10 +85,19 @@ mkShell {
     # Ensure native modules and electron find runtime libs
     export LD_LIBRARY_PATH="${lib.makeLibraryPath [
       webkitgtk_4_1 libsoup_3 openssl libayatana-appindicator librsvg xdotool
+      gst_all_1.gstreamer gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good
+      gst_all_1.gst-plugins-bad gst_all_1.gst-plugins-ugly gst_all_1.gst-libav
       glib nss nspr at-spi2-atk at-spi2-core cups dbus expat libdrm mesa libgbm
       libxkbcommon pango cairo alsa-lib gtk3 gdk-pixbuf libnotify libGL libuuid
       libx11 libxcomposite libxdamage libxext libxfixes libxrandr libxcb
       libxscrnsaver libxtst libxshmfence stdenv.cc.cc
     ]}:$LD_LIBRARY_PATH"
+    export GST_PLUGIN_SYSTEM_PATH_1_0="${lib.makeSearchPath "lib/gstreamer-1.0" [
+      gst_all_1.gst-plugins-base
+      gst_all_1.gst-plugins-good
+      gst_all_1.gst-plugins-bad
+      gst_all_1.gst-plugins-ugly
+      gst_all_1.gst-libav
+    ]}:$GST_PLUGIN_SYSTEM_PATH_1_0"
   '';
 }

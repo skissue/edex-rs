@@ -86,6 +86,7 @@ export class Keyboard {
 
   linkedToTerm = true;
   keydownHandler: (event: KeyboardEvent) => void;
+  keyupHandler: (event: KeyboardEvent) => void;
 
   constructor(opts: { layout: KeyboardLayout; container: string }) {
     const container = document.getElementById(opts.container);
@@ -99,8 +100,9 @@ export class Keyboard {
     this.bindPointerEvents();
     this.bindTouchEvents();
     this.keydownHandler = (event) => this.onKeydown(event);
+    this.keyupHandler = (event) => this.onKeyup(event);
     document.onkeydown = this.keydownHandler;
-    document.onkeyup = (event) => this.onKeyup(event);
+    document.onkeyup = this.keyupHandler;
     window.addEventListener("blur", () => this.releaseActiveKeys());
   }
 

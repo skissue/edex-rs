@@ -92,6 +92,30 @@ function settingAsString(key: string, fallback: string) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
+function initAudioManagerProxy() {
+  let audioManagerPromise: Promise<Record<string, { play: () => void } | undefined>> | null = null;
+  const loadAudioManager = () => {
+    audioManagerPromise ||= import("./audioManager")
+      .then(({ AudioManager }) => new AudioManager() as unknown as Record<string, { play: () => void } | undefined>)
+      .catch((error) => {
+        console.warn("Failed to initialize audio manager", error);
+        return {};
+      });
+    return audioManagerPromise;
+  };
+
+  window.audioManager = new Proxy(
+    {},
+    {
+      get: (_target, sound: string) => ({
+        play: () => {
+          void loadAudioManager().then((manager) => manager[sound]?.play());
+        },
+      }),
+    },
+  );
+}
+
 function fontUrl(fontName: string) {
   const fileName = fontName.toLowerCase().replace(/ /g, "_");
   return `/src/assets/fonts/${fileName}.woff2`;
@@ -339,6 +363,7 @@ async function loadBootstrapConfig() {
   if (keyboardOverride !== null) window.settings.keyboard = keyboardOverride;
 
   window._loadTheme(await readTheme(settingAsString("theme", "tron")));
+  initAudioManagerProxy();
   initSystemInformationProxy();
   await waitForFonts();
 
@@ -402,6 +427,7 @@ async function initKeyboard(layoutName = settingAsString("keyboard", "en-US")) {
     layout: await readKeyboardLayout(layoutName),
     container: "keyboard",
   });
+  window.audioManager?.keyboard?.play();
 }
 
 async function initLeftColumnModules() {
