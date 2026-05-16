@@ -375,6 +375,14 @@ struct SysinfoSnapshot {
     battery: BatteryInfo,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HardwareIdentity {
+    manufacturer: String,
+    model: String,
+    chassis: String,
+}
+
 #[derive(Default)]
 struct BackendState {
     theme_override: Mutex<Option<String>>,
@@ -1392,6 +1400,92 @@ fn get_sysinfo_snapshot() -> SysinfoSnapshot {
     }
 }
 
+fn normalize_hardware_value(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "NONE".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn read_dmi_value(name: &str) -> Option<String> {
+    fs::read_to_string(Path::new("/sys/class/dmi/id").join(name))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn chassis_type_label(value: Option<String>) -> String {
+    let Some(value) = value else {
+        return "NONE".to_string();
+    };
+
+    match value.trim().parse::<u8>().ok() {
+        Some(1) => "Other",
+        Some(2) => "Unknown",
+        Some(3) => "Desktop",
+        Some(4) => "Low Profile Desktop",
+        Some(5) => "Pizza Box",
+        Some(6) => "Mini Tower",
+        Some(7) => "Tower",
+        Some(8) => "Portable",
+        Some(9) => "Laptop",
+        Some(10) => "Notebook",
+        Some(11) => "Hand Held",
+        Some(12) => "Docking Station",
+        Some(13) => "All in One",
+        Some(14) => "Sub Notebook",
+        Some(15) => "Space-saving",
+        Some(16) => "Lunch Box",
+        Some(17) => "Main Server Chassis",
+        Some(18) => "Expansion Chassis",
+        Some(19) => "SubChassis",
+        Some(20) => "Bus Expansion Chassis",
+        Some(21) => "Peripheral Chassis",
+        Some(22) => "RAID Chassis",
+        Some(23) => "Rack Mount Chassis",
+        Some(24) => "Sealed-case PC",
+        Some(25) => "Multi-system",
+        Some(26) => "CompactPCI",
+        Some(27) => "AdvancedTCA",
+        Some(28) => "Blade",
+        Some(29) => "Blade Enclosure",
+        Some(30) => "Tablet",
+        Some(31) => "Convertible",
+        Some(32) => "Detachable",
+        Some(33) => "IoT Gateway",
+        Some(34) => "Embedded PC",
+        Some(35) => "Mini PC",
+        Some(36) => "Stick PC",
+        _ => value.trim(),
+    }
+    .to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn read_hardware_identity() -> HardwareIdentity {
+    HardwareIdentity {
+        manufacturer: normalize_hardware_value(read_dmi_value("sys_vendor")),
+        model: normalize_hardware_value(read_dmi_value("product_name")),
+        chassis: chassis_type_label(read_dmi_value("chassis_type")),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_hardware_identity() -> HardwareIdentity {
+    HardwareIdentity {
+        manufacturer: "NONE".to_string(),
+        model: "NONE".to_string(),
+        chassis: "NONE".to_string(),
+    }
+}
+
+#[tauri::command]
+fn get_hardware_identity() -> HardwareIdentity {
+    read_hardware_identity()
+}
+
 #[tauri::command]
 fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, String> {
     Err(format!(
@@ -1806,6 +1900,7 @@ pub fn run() {
             restart_app,
             get_platform_info,
             get_sysinfo_snapshot,
+            get_hardware_identity,
             system_information_call,
             list_filesystem_directory,
             list_filesystem_devices,
