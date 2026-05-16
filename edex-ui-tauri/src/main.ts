@@ -427,8 +427,9 @@ async function initLeftColumnModules() {
 
 async function initRightColumnModules() {
   try {
-    const { Netstat } = await import("./netstat");
+    const [{ Netstat }, { Conninfo }] = await Promise.all([import("./netstat"), import("./conninfo")]);
     window.mods.netstat = new Netstat("mod_column_right");
+    window.mods.conninfo = new Conninfo("mod_column_right");
   } catch (error) {
     console.error("Failed to initialize right column modules", error);
     void logMessage("error", `Failed to initialize right column modules: ${String(error)}`);

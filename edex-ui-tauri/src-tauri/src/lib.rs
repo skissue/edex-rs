@@ -447,6 +447,16 @@ struct NetworkStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct NetworkStatsInfo {
+    iface: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+    rx_sec: u64,
+    tx_sec: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SystemMetrics {
     cpu: CpuMetrics,
     memory: MemoryMetrics,
@@ -459,6 +469,7 @@ struct BackendState {
     cpu_samples: Mutex<Option<Vec<CpuStatSample>>>,
     process_system: Mutex<System>,
     network_system: Mutex<Networks>,
+    network_stats_system: Mutex<Networks>,
 }
 
 impl Default for BackendState {
@@ -469,6 +480,7 @@ impl Default for BackendState {
             cpu_samples: Mutex::new(None),
             process_system: Mutex::new(System::new_all()),
             network_system: Mutex::new(Networks::new_with_refreshed_list()),
+            network_stats_system: Mutex::new(Networks::new_with_refreshed_list()),
         }
     }
 }
@@ -1971,6 +1983,26 @@ fn get_network_status(
 }
 
 #[tauri::command]
+fn get_network_stats(
+    state: State<'_, BackendState>,
+    iface: String,
+) -> Result<Option<NetworkStatsInfo>, String> {
+    let mut networks = state
+        .network_stats_system
+        .lock()
+        .map_err(|_| "network stats state is poisoned".to_string())?;
+    networks.refresh(true);
+
+    Ok(networks.get(&iface).map(|network| NetworkStatsInfo {
+        iface,
+        rx_bytes: network.total_received(),
+        tx_bytes: network.total_transmitted(),
+        rx_sec: network.received(),
+        tx_sec: network.transmitted(),
+    }))
+}
+
+#[tauri::command]
 fn system_information_call(method: String, args: Vec<Value>) -> Result<Value, String> {
     Err(format!(
         "system information method '{method}' is not implemented in the Rust backend yet ({} args)",
@@ -2389,6 +2421,7 @@ pub fn run() {
             get_memory_metrics,
             get_process_metrics,
             get_network_status,
+            get_network_stats,
             get_system_metrics,
             system_information_call,
             list_filesystem_directory,

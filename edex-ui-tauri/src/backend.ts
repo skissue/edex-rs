@@ -152,6 +152,14 @@ export type NetworkStatus = {
   interfaces: NetworkInterfaceInfo[];
 };
 
+export type NetworkStatsInfo = {
+  iface: string;
+  rxBytes: number;
+  txBytes: number;
+  rxSec: number;
+  txSec: number;
+};
+
 export type SystemMetrics = {
   cpu: CpuMetrics;
   memory: MemoryMetrics;
@@ -349,6 +357,10 @@ export function getNetworkStatus(iface?: string, pingAddr?: string) {
     iface: iface || null,
     pingAddr: pingAddr || null,
   });
+}
+
+export function getNetworkStats(iface: string) {
+  return invoke<NetworkStatsInfo | null>("get_network_stats", { iface });
 }
 
 export function getMonitors() {
