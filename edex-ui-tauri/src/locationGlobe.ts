@@ -295,7 +295,7 @@ export class LocationGlobe {
       const newconns = Array.from(
         new Set(
           connections
-            .filter((conn) => conn.state === "ESTABLISHED" && conn.peerAddress !== "0.0.0.0" && conn.peerAddress !== "127.0.0.1")
+            .filter((conn) => conn.state === "ESTABLISHED")
             .map((conn) => conn.peerAddress),
         ),
       );

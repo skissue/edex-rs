@@ -171,7 +171,11 @@ export type ExternalIpInfo = {
 };
 
 export type NetworkConnectionInfo = {
+  localAddress: string;
+  localPort: number;
   peerAddress: string;
+  peerPort: number;
+  protocol: string;
   state: string;
 };
 

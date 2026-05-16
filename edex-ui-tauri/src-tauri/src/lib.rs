@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -481,7 +481,11 @@ struct IpApiResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NetworkConnectionInfo {
+    local_address: String,
+    local_port: u16,
     peer_address: String,
+    peer_port: u16,
+    protocol: String,
     state: String,
 }
 
@@ -2041,8 +2045,8 @@ fn fetch_external_ip_info() -> Result<ExternalIpInfo, String> {
 }
 
 fn fetch_ip_geo(ip: String) -> Result<Option<GeoLocation>, String> {
-    ip.parse::<Ipv4Addr>()
-        .map_err(|err| format!("invalid IPv4 address '{ip}': {err}"))?;
+    ip.parse::<IpAddr>()
+        .map_err(|err| format!("invalid IP address '{ip}': {err}"))?;
     let response = fetch_ip_api(&format!("/json/{ip}?fields=status,message,lat,lon"))?;
     if response.status != "success" {
         return Err(response
@@ -2053,12 +2057,97 @@ fn fetch_ip_geo(ip: String) -> Result<Option<GeoLocation>, String> {
     Ok(geo_from_ip_api_response(&response))
 }
 
-fn parse_proc_tcp_peer(hex: &str) -> Option<Ipv4Addr> {
+fn parse_proc_tcp_ipv4(hex: &str) -> Option<Ipv4Addr> {
     let raw = u32::from_str_radix(hex, 16).ok()?;
     Some(Ipv4Addr::from(raw.to_le_bytes()))
 }
 
-fn read_proc_tcp_connections(path: &str) -> Vec<NetworkConnectionInfo> {
+fn parse_proc_tcp_ipv6(hex: &str) -> Option<Ipv6Addr> {
+    if hex.len() != 32 {
+        return None;
+    }
+
+    let mut bytes = [0_u8; 16];
+    for index in 0..4 {
+        let hex_start = index * 8;
+        let byte_start = index * 4;
+        let word = u32::from_str_radix(&hex[hex_start..hex_start + 8], 16).ok()?;
+        bytes[byte_start..byte_start + 4].copy_from_slice(&word.to_le_bytes());
+    }
+
+    Some(Ipv6Addr::from(bytes))
+}
+
+fn parse_proc_tcp_endpoint(
+    endpoint: &str,
+    parser: fn(&str) -> Option<IpAddr>,
+) -> Option<(IpAddr, u16)> {
+    let (address_hex, port_hex) = endpoint.split_once(':')?;
+    let address = parser(address_hex)?;
+    let port = u16::from_str_radix(port_hex, 16).ok()?;
+    Some((address, port))
+}
+
+fn parse_proc_tcp4_address(hex: &str) -> Option<IpAddr> {
+    parse_proc_tcp_ipv4(hex).map(IpAddr::V4)
+}
+
+fn parse_proc_tcp6_address(hex: &str) -> Option<IpAddr> {
+    parse_proc_tcp_ipv6(hex).map(IpAddr::V6)
+}
+
+fn is_public_peer_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
+                || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0))
+        }
+        IpAddr::V6(ip) => {
+            let octets = ip.octets();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                || (octets[0] & 0xfe) == 0xfc
+                || (octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80)
+                || (octets[0] == 0x20
+                    && octets[1] == 0x01
+                    && octets[2] == 0x0d
+                    && octets[3] == 0xb8))
+        }
+    }
+}
+
+fn proc_tcp_state_name(state: &str) -> Option<&'static str> {
+    match state {
+        "01" => Some("ESTABLISHED"),
+        "02" => Some("SYN_SENT"),
+        "03" => Some("SYN_RECV"),
+        "04" => Some("FIN_WAIT1"),
+        "05" => Some("FIN_WAIT2"),
+        "06" => Some("TIME_WAIT"),
+        "07" => Some("CLOSE"),
+        "08" => Some("CLOSE_WAIT"),
+        "09" => Some("LAST_ACK"),
+        "0A" => Some("LISTEN"),
+        "0B" => Some("CLOSING"),
+        _ => None,
+    }
+}
+
+fn read_proc_tcp_connections(
+    path: &str,
+    protocol: &str,
+    parser: fn(&str) -> Option<IpAddr>,
+) -> Vec<NetworkConnectionInfo> {
     fs::read_to_string(path)
         .map(|contents| {
             contents
@@ -2067,22 +2156,27 @@ fn read_proc_tcp_connections(path: &str) -> Vec<NetworkConnectionInfo> {
                 .filter_map(|line| {
                     let mut parts = line.split_whitespace();
                     let _slot = parts.next()?;
-                    let _local = parts.next()?;
+                    let local = parts.next()?;
                     let remote = parts.next()?;
                     let state = parts.next()?;
-                    if state != "01" {
+                    let state = proc_tcp_state_name(state)?;
+                    if state != "ESTABLISHED" {
                         return None;
                     }
 
-                    let (address_hex, _port_hex) = remote.split_once(':')?;
-                    let peer = parse_proc_tcp_peer(address_hex)?;
-                    if peer.is_unspecified() || peer.is_loopback() {
+                    let (local_address, local_port) = parse_proc_tcp_endpoint(local, parser)?;
+                    let (peer_address, peer_port) = parse_proc_tcp_endpoint(remote, parser)?;
+                    if !is_public_peer_address(peer_address) {
                         return None;
                     }
 
                     Some(NetworkConnectionInfo {
-                        peer_address: peer.to_string(),
-                        state: "ESTABLISHED".to_string(),
+                        local_address: local_address.to_string(),
+                        local_port,
+                        peer_address: peer_address.to_string(),
+                        peer_port,
+                        protocol: protocol.to_string(),
+                        state: state.to_string(),
                     })
                 })
                 .collect()
@@ -2091,9 +2185,29 @@ fn read_proc_tcp_connections(path: &str) -> Vec<NetworkConnectionInfo> {
 }
 
 fn read_network_connections() -> Vec<NetworkConnectionInfo> {
-    let mut connections = read_proc_tcp_connections("/proc/net/tcp");
-    connections.sort_by(|a, b| a.peer_address.cmp(&b.peer_address));
-    connections.dedup_by(|a, b| a.peer_address == b.peer_address);
+    let mut connections =
+        read_proc_tcp_connections("/proc/net/tcp", "tcp4", parse_proc_tcp4_address);
+    connections.extend(read_proc_tcp_connections(
+        "/proc/net/tcp6",
+        "tcp6",
+        parse_proc_tcp6_address,
+    ));
+    connections.sort_by(|a, b| {
+        (&a.protocol, &a.peer_address, a.peer_port, &a.local_address, a.local_port).cmp(&(
+            &b.protocol,
+            &b.peer_address,
+            b.peer_port,
+            &b.local_address,
+            b.local_port,
+        ))
+    });
+    connections.dedup_by(|a, b| {
+        a.protocol == b.protocol
+            && a.peer_address == b.peer_address
+            && a.peer_port == b.peer_port
+            && a.local_address == b.local_address
+            && a.local_port == b.local_port
+    });
     connections
 }
 
