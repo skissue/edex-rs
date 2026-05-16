@@ -15,6 +15,7 @@ import {
 } from "./backend";
 import type { FilesystemDisplay } from "./filesystem";
 import { FuzzyFinder } from "./fuzzyFinder";
+import { HardwareInspector } from "./hardwareInspector";
 import { Keyboard } from "./keyboard";
 import { openSettings, openShortcutsHelp, writeSettingsFile } from "./settings";
 import { Sysinfo } from "./sysinfo";
@@ -405,6 +406,16 @@ async function initKeyboard(layoutName = settingAsString("keyboard", "en-US")) {
   });
 }
 
+function initLeftColumnModules() {
+  try {
+    window.mods.sysinfo = new Sysinfo("mod_column_left");
+    window.mods.hardwareInspector = new HardwareInspector("mod_column_left");
+  } catch (error) {
+    console.error("Failed to initialize left column modules", error);
+    void logMessage("error", `Failed to initialize left column modules: ${String(error)}`);
+  }
+}
+
 window.themeChanger = (theme: string) => {
   setThemeOverride(theme)
     .catch((error) => {
@@ -601,11 +612,11 @@ window.addEventListener("DOMContentLoaded", () => {
   loadBootstrapConfig()
     .then(async () => {
       window.registerKeyboardShortcuts();
-      window.mods.sysinfo = new Sysinfo("mod_column_left");
       await initKeyboard();
       initTerminalBackend().then(initFilesystemDisplay).catch((error) => {
         logStartupError("Terminal failed to initialize", error);
       });
+      window.setTimeout(initLeftColumnModules, 0);
     })
     .catch((error) => {
       logStartupError("Failed to load eDEX config", error);

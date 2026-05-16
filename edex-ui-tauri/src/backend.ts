@@ -101,6 +101,12 @@ export type SysinfoSnapshot = {
   battery: BatteryInfo;
 };
 
+export type HardwareIdentity = {
+  manufacturer: string;
+  model: string;
+  chassis: string;
+};
+
 export type ShortcutConfig = {
   trigger: string;
   type: "app" | "shell" | string;
@@ -265,6 +271,10 @@ export function getPlatformInfo() {
 
 export function getSysinfoSnapshot() {
   return invoke<SysinfoSnapshot>("get_sysinfo_snapshot");
+}
+
+export function getHardwareIdentity() {
+  return invoke<HardwareIdentity>("get_hardware_identity");
 }
 
 export function getMonitors() {
