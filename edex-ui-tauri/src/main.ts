@@ -4,6 +4,7 @@ import {
   getThemeOverride,
   logMessage,
   openDevtools,
+  quitApp,
   readKeyboardLayout,
   readTheme,
   setKeyboardOverride,
@@ -424,6 +425,7 @@ async function createTerminal(number: number) {
   term.onclose = () => {
     if (number === 0) {
       setShellTabText(number, "MAIN - EXITED");
+      quitApp(0).catch((error) => console.error("Failed to quit after main terminal exited", error));
       return;
     }
 

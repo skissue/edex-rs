@@ -1440,7 +1440,14 @@ fn open_devtools(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn quit_app(app: AppHandle, exit_code: Option<i32>) {
+fn quit_app(
+    app: AppHandle,
+    state: State<'_, TerminalManager>,
+    exit_code: Option<i32>,
+) {
+    if let Err(err) = state.kill_all() {
+        eprintln!("[terminal] failed to clean up PTY sessions before quit: {err}");
+    }
     app.exit(exit_code.unwrap_or(0));
 }
 

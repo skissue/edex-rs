@@ -422,6 +422,6 @@ export function openDevtools() {
   return invoke<void>("open_devtools");
 }
 
-export function quitApp() {
-  return invoke<void>("quit_app");
+export function quitApp(exitCode = 0) {
+  return invoke<void>("quit_app", { exitCode });
 }
