@@ -32,6 +32,10 @@ body {
   font-family: var(--font_main), sans-serif;
 }
 
+body.booting > section:not(#boot_screen) {
+  display: none !important;
+}
+
 *,
 *::before,
 *::after {

@@ -18,6 +18,7 @@ import { FuzzyFinder } from "./fuzzyFinder";
 import { Keyboard } from "./keyboard";
 import { openSettings, openShortcutsHelp, writeSettingsFile } from "./settings";
 import type { TauriTerminal } from "./terminal";
+import bootLogText from "./assets/misc/boot_log.txt?raw";
 
 declare global {
   interface Window {
@@ -114,6 +115,101 @@ function initAudioManagerProxy() {
       }),
     },
   );
+}
+
+function bootDelayForLine(index: number, total: number) {
+  if (index === 2 || index === 4) return 500;
+  if (index > 4 && index < 25) return 30;
+  if (index === 25) return 400;
+  if (index === 42) return 300;
+  if (index > 42 && index < 82) return 25;
+  if (index === 83) return 25;
+  if (index >= total - 2 && index < total) return 300;
+  return Math.pow(1 - index / 1000, 3) * 25;
+}
+
+function ensureBootScreen() {
+  let bootScreen = document.getElementById("boot_screen");
+  if (!bootScreen) {
+    bootScreen = document.createElement("section");
+    bootScreen.id = "boot_screen";
+    document.body.prepend(bootScreen);
+  }
+  return bootScreen;
+}
+
+async function displayBootLog() {
+  const bootScreen = ensureBootScreen();
+  const log = bootLogText.split("\n");
+
+  bootScreen.className = "";
+  bootScreen.innerHTML = "";
+  document.body.classList.add("solidBackground", "booting");
+
+  for (let index = 0; index < log.length; index += 1) {
+    const line = log[index];
+    if (line === "Boot Complete") window.audioManager?.granted?.play();
+    else window.audioManager?.stdout?.play();
+
+    bootScreen.innerHTML += `${line}<br/>`;
+
+    const nextIndex = index + 1;
+    if (nextIndex === 2) {
+      bootScreen.innerHTML += `eDEX-UI Kernel version ${window.edexBoot?.metadata.version || "0.0.0"} boot at ${new Date().toString()}; root:xnu-1699.22.73~1/RELEASE_X86_64<br/>`;
+    }
+
+    await window._delay(bootDelayForLine(nextIndex, log.length));
+  }
+
+  await window._delay(300);
+}
+
+async function displayTitleScreen() {
+  const bootScreen = ensureBootScreen();
+  bootScreen.innerHTML = "";
+
+  await window._delay(400);
+
+  document.body.classList.remove("solidBackground");
+  bootScreen.className = "center";
+  window.audioManager?.theme?.play();
+  bootScreen.innerHTML = "<h1>eDEX-UI</h1>";
+  const title = bootScreen.querySelector("h1");
+  if (!title) return;
+
+  await window._delay(200);
+
+  document.body.classList.add("solidBackground");
+
+  await window._delay(100);
+
+  title.setAttribute(
+    "style",
+    `background-color: rgb(${window.theme?.r}, ${window.theme?.g}, ${window.theme?.b});border-bottom: 5px solid rgb(${window.theme?.r}, ${window.theme?.g}, ${window.theme?.b});`,
+  );
+
+  await window._delay(300);
+
+  title.setAttribute("style", `border: 5px solid rgb(${window.theme?.r}, ${window.theme?.g}, ${window.theme?.b});`);
+
+  await window._delay(100);
+
+  title.setAttribute("style", "");
+  title.className = "glitch";
+
+  await window._delay(500);
+
+  document.body.classList.remove("solidBackground");
+  title.className = "";
+  title.setAttribute("style", `border: 5px solid rgb(${window.theme?.r}, ${window.theme?.g}, ${window.theme?.b});`);
+
+  await window._delay(1000);
+  bootScreen.remove();
+}
+
+async function displayStartupIntro() {
+  await displayBootLog();
+  await displayTitleScreen();
 }
 
 function fontUrl(fontName: string) {
@@ -231,7 +327,7 @@ function initSystemInformationProxy() {
 }
 
 function waitForFonts() {
-  return new Promise<void>((resolve) => {
+  const fontsReady = new Promise<void>((resolve) => {
     if (document.readyState === "complete" && document.fonts.status === "loaded") {
       resolve();
       return;
@@ -253,6 +349,13 @@ function waitForFonts() {
       });
     }
   });
+
+  return Promise.race([
+    fontsReady,
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 1500);
+    }),
+  ]);
 }
 
 function activeTerminal() {
@@ -365,7 +468,6 @@ async function loadBootstrapConfig() {
   window._loadTheme(await readTheme(settingAsString("theme", "tron")));
   initAudioManagerProxy();
   initSystemInformationProxy();
-  await waitForFonts();
 
   if (boot.terminalLaunchError) {
     console.warn("Terminal launch config is invalid", boot.terminalLaunchError);
@@ -428,6 +530,143 @@ async function initKeyboard(layoutName = settingAsString("keyboard", "en-US")) {
     container: "keyboard",
   });
   window.audioManager?.keyboard?.play();
+}
+
+function getDisplayName() {
+  const configured = window.settings.username;
+  if (typeof configured === "string" && configured.trim()) return configured.trim();
+  const env = window.edexBoot?.terminalLaunch.env || {};
+  return env.USER || env.USERNAME || "";
+}
+
+function setModuleAnimations(playState: "paused" | "running") {
+  document.querySelectorAll<HTMLElement>(".mod_column > div").forEach((element) => {
+    element.style.animationPlayState = playState;
+  });
+}
+
+function shellIntroStyle(extra = "") {
+  return `position:fixed;left:50%;top:34vh;transform:translate(-50%, -50%);${extra}`;
+}
+
+async function revealModuleColumns() {
+  await Promise.all([initLeftColumnModules(), initRightColumnModules()]);
+
+  setModuleAnimations("paused");
+  document.querySelectorAll(".mod_column").forEach((element) => {
+    element.classList.add("activated");
+  });
+
+  const left = Array.from(document.querySelectorAll<HTMLElement>("#mod_column_left > div"));
+  const right = Array.from(document.querySelectorAll<HTMLElement>("#mod_column_right > div"));
+  const count = Math.max(left.length, right.length);
+  for (let index = 0; index < count; index += 1) {
+    window.audioManager?.panels?.play();
+    if (left[index]) left[index].style.animationPlayState = "running";
+    if (right[index]) right[index].style.animationPlayState = "running";
+    await window._delay(500);
+  }
+}
+
+function prepareIntroUi() {
+  document.body.classList.remove("booting", "solidBackground");
+
+  const mainShell = document.getElementById("main_shell");
+  const shellTitle = document.querySelector<HTMLElement>("#main_shell > h3.title");
+  const shellTabs = document.getElementById("main_shell_tabs");
+  const shellInner = document.getElementById("main_shell_innercontainer");
+  const filesystem = document.getElementById("filesystem");
+  const keyboard = document.getElementById("keyboard");
+
+  document.querySelectorAll(".mod_column").forEach((element) => {
+    element.classList.remove("activated");
+  });
+  setModuleAnimations("paused");
+
+  mainShell?.setAttribute("style", shellIntroStyle("height:0%;width:0%;opacity:0;"));
+  shellTitle?.setAttribute("style", "opacity:0;");
+  if (shellTabs) shellTabs.style.display = "none";
+  if (shellInner) shellInner.style.display = "none";
+  filesystem?.setAttribute("style", "visibility:hidden;opacity:0;");
+  keyboard?.setAttribute("style", "visibility:hidden;opacity:0;");
+
+  document.getElementById("main_shell_greeting")?.remove();
+  const greeting = document.createElement("h1");
+  greeting.id = "main_shell_greeting";
+  mainShell?.append(greeting);
+}
+
+async function runIntroUiSequence() {
+  prepareIntroUi();
+
+  const mainShell = document.getElementById("main_shell");
+  const shellTitle = document.querySelector<HTMLElement>("#main_shell > h3.title");
+  const shellTabs = document.getElementById("main_shell_tabs");
+  const shellInner = document.getElementById("main_shell_innercontainer");
+  const filesystem = document.getElementById("filesystem");
+  const keyboard = document.getElementById("keyboard");
+  const greeting = document.getElementById("main_shell_greeting");
+
+  await window._delay(10);
+
+  window.audioManager?.expand?.play();
+  mainShell?.setAttribute("style", shellIntroStyle("height:0%;"));
+
+  await window._delay(500);
+
+  mainShell?.setAttribute("style", shellIntroStyle());
+  shellTitle?.setAttribute("style", "");
+
+  await window._delay(700);
+
+  mainShell?.setAttribute("style", shellIntroStyle("opacity:0;visibility:hidden;"));
+  await initKeyboard();
+
+  await window._delay(10);
+
+  mainShell?.setAttribute("style", "visibility:hidden;");
+
+  await window._delay(50);
+
+  mainShell?.setAttribute("style", "");
+
+  await window._delay(270);
+
+  const user = getDisplayName();
+  if (greeting) {
+    greeting.innerHTML = user ? `Welcome back, <em>${window._escapeHtml(user)}</em>` : "Welcome back";
+    greeting.style.opacity = "1";
+  }
+
+  filesystem?.setAttribute("style", "");
+  keyboard?.setAttribute("style", "");
+  keyboard?.setAttribute("class", "animation_state_1");
+
+  await window._delay(100);
+
+  keyboard?.setAttribute("class", "animation_state_1 animation_state_2");
+
+  await window._delay(1000);
+
+  if (greeting) greeting.style.opacity = "0";
+
+  await window._delay(100);
+
+  keyboard?.setAttribute("class", "");
+
+  await window._delay(400);
+
+  greeting?.remove();
+  await revealModuleColumns();
+
+  if (shellTabs) shellTabs.style.display = "";
+  if (shellInner) shellInner.style.display = "";
+
+  await initTerminalBackend();
+  await window._delay(100);
+  await initFilesystemDisplay();
+  await window._delay(200);
+  filesystem?.setAttribute("style", "opacity: 1;");
 }
 
 async function initLeftColumnModules() {
@@ -663,23 +902,34 @@ window.addEventListener("DOMContentLoaded", () => {
   loadBootstrapConfig()
     .then(async () => {
       window.registerKeyboardShortcuts();
-      const keyboardReady = initKeyboard().catch((error) => {
-        logStartupError("Keyboard failed to initialize", error);
-      });
-      const terminalReady = initTerminalBackend()
-        .then(initFilesystemDisplay)
-        .catch((error) => {
-          logStartupError("Terminal failed to initialize", error);
-        });
+      if (window.settings.nointro || window.settings.nointroOverride) {
+        document.getElementById("boot_screen")?.remove();
+        document.body.classList.remove("booting", "solidBackground");
+        await waitForFonts();
 
-      Promise.allSettled([keyboardReady, terminalReady]).then(() => {
-        window.setTimeout(() => {
-          void initLeftColumnModules();
-          void initRightColumnModules();
-        }, 250);
-      });
+        const keyboardReady = initKeyboard().catch((error) => {
+          logStartupError("Keyboard failed to initialize", error);
+        });
+        const terminalReady = initTerminalBackend()
+          .then(initFilesystemDisplay)
+          .catch((error) => {
+            logStartupError("Terminal failed to initialize", error);
+          });
+
+        Promise.allSettled([keyboardReady, terminalReady]).then(() => {
+          window.setTimeout(() => {
+            void initLeftColumnModules();
+            void initRightColumnModules();
+          }, 250);
+        });
+      } else {
+        await displayStartupIntro();
+        await waitForFonts();
+        await runIntroUiSequence();
+      }
     })
     .catch((error) => {
+      document.body.classList.remove("booting", "solidBackground");
       logStartupError("Failed to load eDEX config", error);
     });
   updateClock();
